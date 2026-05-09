@@ -184,25 +184,59 @@ Handoff: Initial Pipeline Implementation - Phase 4
    - Verify that state transitions are logged or observable if necessary for debugging (optional).
 
   Status
-   - Task State: IN_PROGRESS
+   - Task State: REVIEW_REQUIRED
    - Assigned To: Claude Code
 
   Execution Progress
    - Implementation Notes: |
-       Not yet implemented. src/pipeline.ts still uses the original sequential
-       imperative approach — no reducer function exists. PipelineState and
-       PipelineEvent types are fully defined in src/types.ts (committed in
-       3bc9770) and ready to be consumed.
+       Implemented. src/pipeline.ts now contains:
 
-       Recent non-reducer commits since task was opened:
-         c651270 — Added project scaffolding, conductor docs, Claude/Gemini
-                   agent configs, README, and replaced placeholder add()
-                   with a real LRUCache implementation in generated-code.ts.
-                   Also committed .claude/settings.json.
-         1e3732b — Added **/.DS_Store to .gitignore and removed tracked
-                   root .DS_Store from the index.
+       1. collectOutputs(state: PipelineState) — private helper that extracts
+          all accumulated StageOutput values from any state variant into a flat
+          Partial<Record<StageName, StageOutput>>. Used by the FAILURE case in
+          the reducer to snapshot prior outputs regardless of which state failed.
 
-       None of the above commits touch src/pipeline.ts. The reducer task
-       remains fully unstarted; src/pipeline.ts is clean and ready for the
-       refactor.
+       2. reducer(state: PipelineState, event: PipelineEvent): PipelineState —
+          exported pure function. Handles all 11 PipelineEvent variants. Each
+          case guards on the expected current status before transitioning;
+          out-of-order events return state unchanged. AUDIT_PRE_FAIL and
+          AUDIT_POST_FAIL events are defined and handled, producing a "failed"
+          state directly. The FAILURE event is the general-purpose failure path
+          (used for early stage terminations and ESCALATE audits) and delegates
+          to collectOutputs to gather whatever prior outputs exist.
+
+       3. runPipeline(spec: string) — refactored to drive all state transitions
+          through the reducer. Pattern per stage:
+            • dispatch FAILURE + await terminate() on non-PASS (or ESCALATE
+              for audit stages), preserving existing termination behavior exactly
+            • dispatch the success event to advance state on PASS
+          State is threaded as `let state: PipelineState` initialized via
+          reducer({ status: "idle" }, { type: "START", spec }). Local stage
+          output variables are retained alongside state for use in building
+          subsequent stage configs (e.g. research.content → planConfig).
+
+       Design note recorded from pre-implementation review:
+          PipelineEvent has AUDIT_PRE_FAIL / AUDIT_POST_FAIL, but the Nemotron
+          auditors currently only emit PASS or ESCALATE (never FAIL). The
+          reducer handles both, but runPipeline maps ESCALATE → FAILURE event
+          (general path) and PASS → AUDIT_PRE_PASS / AUDIT_POST_PASS. AUDIT_PRE_FAIL
+          and AUDIT_POST_FAIL are reserved for hypothetical future non-ESCALATE
+          audit failures and are not dispatched in the current orchestration.
+
    - Blockers: None
+
+  Handoff Back to Gemini
+   - Files Changed:
+       1. src/pipeline.ts — added collectOutputs(), added exported reducer(),
+          refactored runPipeline() to drive all transitions through reducer;
+          imports updated to include PipelineState and PipelineEvent from types.js.
+
+   - Verification Results:
+       npx tsc --noEmit: passed with no errors.
+       Logic review: all 7 stages retain identical API call, writeStage, file-write,
+         and terminate() behavior. Failure paths dispatch FAILURE before terminate;
+         success paths dispatch the appropriate success event. assertEnv() is still
+         the first call in runPipeline.
+
+   - Confirmation: No behavioral change to the running pipeline — only the state
+       tracking layer was added. The reducer is pure and side-effect free.

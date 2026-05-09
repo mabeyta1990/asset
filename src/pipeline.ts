@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { readFile, writeFile } from "node:fs/promises";
-import type { PromptConfig, StageName, StageOutput, StageVerdict } from "./types.js";
+import type { PromptConfig, StageName, StageOutput, StageVerdict, PipelineState, PipelineEvent } from "./types.js";
 import { initSession, writeStage, finalizeSession } from "./memory.js";
 import { refreshCanonicalState } from "./cache/refresh.js";
 import { callResearch } from "./wrappers/research.js";
@@ -25,6 +25,80 @@ function assertEnv(): void {
       "Configuration error: one or more required credentials are not set. " +
       "Check your Doppler project setup or .env file.",
     );
+  }
+}
+
+function collectOutputs(state: PipelineState): Partial<Record<StageName, StageOutput>> {
+  switch (state.status) {
+    case "idle": return {};
+    case "researching": return {};
+    case "planning": return { research: state.researchOutput };
+    case "coding": return { research: state.researchOutput, plan: state.planOutput };
+    case "testing": return { research: state.researchOutput, plan: state.planOutput, code: state.codeOutput };
+    case "auditing_pre": return { research: state.researchOutput, plan: state.planOutput, code: state.codeOutput, tests: state.testOutput };
+    case "executing": return { research: state.researchOutput, plan: state.planOutput, code: state.codeOutput, tests: state.testOutput, "audit-pre": state.auditPreOutput };
+    case "auditing_post": return { research: state.researchOutput, plan: state.planOutput, code: state.codeOutput, tests: state.testOutput, "audit-pre": state.auditPreOutput, execution: state.executionOutput };
+    case "completed": return state.stages;
+    case "failed": return state.priorOutputs;
+  }
+}
+
+export function reducer(state: PipelineState, event: PipelineEvent): PipelineState {
+  switch (event.type) {
+    case "START":
+      return { status: "researching", spec: event.spec };
+
+    case "RESEARCH_COMPLETE":
+      if (state.status !== "researching") return state;
+      return { status: "planning", researchOutput: event.output };
+
+    case "PLAN_READY":
+      if (state.status !== "planning") return state;
+      return { status: "coding", researchOutput: state.researchOutput, planOutput: event.output };
+
+    case "CODE_READY":
+      if (state.status !== "coding") return state;
+      return { status: "testing", researchOutput: state.researchOutput, planOutput: state.planOutput, codeOutput: event.output };
+
+    case "TESTS_READY":
+      if (state.status !== "testing") return state;
+      return { status: "auditing_pre", researchOutput: state.researchOutput, planOutput: state.planOutput, codeOutput: state.codeOutput, testOutput: event.output };
+
+    case "AUDIT_PRE_PASS":
+      if (state.status !== "auditing_pre") return state;
+      return { status: "executing", researchOutput: state.researchOutput, planOutput: state.planOutput, codeOutput: state.codeOutput, testOutput: state.testOutput, auditPreOutput: event.output };
+
+    case "AUDIT_PRE_FAIL":
+      if (state.status !== "auditing_pre") return state;
+      return { status: "failed", failedStage: "audit-pre", error: event.output.content, priorOutputs: { research: state.researchOutput, plan: state.planOutput, code: state.codeOutput, tests: state.testOutput } };
+
+    case "EXECUTION_COMPLETE":
+      if (state.status !== "executing") return state;
+      return { status: "auditing_post", researchOutput: state.researchOutput, planOutput: state.planOutput, codeOutput: state.codeOutput, testOutput: state.testOutput, auditPreOutput: state.auditPreOutput, executionOutput: event.output };
+
+    case "AUDIT_POST_PASS":
+      if (state.status !== "auditing_post") return state;
+      return {
+        status: "completed",
+        stages: {
+          research: state.researchOutput,
+          plan: state.planOutput,
+          code: state.codeOutput,
+          tests: state.testOutput,
+          "audit-pre": state.auditPreOutput,
+          execution: state.executionOutput,
+          "audit-post": event.output,
+        },
+        finalVerdict: "PASS",
+      };
+
+    case "AUDIT_POST_FAIL":
+      if (state.status !== "auditing_post") return state;
+      return { status: "failed", failedStage: "audit-post", error: event.output.content, priorOutputs: { research: state.researchOutput, plan: state.planOutput, code: state.codeOutput, tests: state.testOutput, "audit-pre": state.auditPreOutput, execution: state.executionOutput } };
+
+    case "FAILURE": {
+      return { status: "failed", failedStage: event.failedStage, error: event.error, priorOutputs: collectOutputs(state) };
+    }
   }
 }
 
@@ -76,6 +150,8 @@ export async function runPipeline(spec: string): Promise<void> {
   assertEnv();
   const sessionId = await initSession(spec);
 
+  let state: PipelineState = reducer({ status: "idle" }, { type: "START", spec });
+
   // Stage 0: Research (Tavily)
   const research = await callResearch(
     { systemPrompt: "", stableContext: "", variableTask: spec },
@@ -83,7 +159,11 @@ export async function runPipeline(spec: string): Promise<void> {
     1,
   );
   await writeStage(sessionId, 0, "research", research);
-  if (research.status !== "PASS") await terminate(sessionId, research.status, "research", research);
+  if (research.status !== "PASS") {
+    state = reducer(state, { type: "FAILURE", failedStage: "research", error: research.content });
+    await terminate(sessionId, research.status, "research", research);
+  }
+  state = reducer(state, { type: "RESEARCH_COMPLETE", output: research });
 
   // Stage 1: Plan (Gemini 2.5 Pro)
   const planConfig: PromptConfig = {
@@ -94,7 +174,11 @@ export async function runPipeline(spec: string): Promise<void> {
   };
   const plan = await callGemini(planConfig, "plan", 1, { displayName: GEMINI_CACHE_NAME });
   await writeStage(sessionId, 1, "plan", plan);
-  if (plan.status !== "PASS") await terminate(sessionId, plan.status, "plan", plan);
+  if (plan.status !== "PASS") {
+    state = reducer(state, { type: "FAILURE", failedStage: "plan", error: plan.content });
+    await terminate(sessionId, plan.status, "plan", plan);
+  }
+  state = reducer(state, { type: "PLAN_READY", output: plan });
 
   // Stage 2: Code (Claude Opus 4.7)
   const codeConfig: PromptConfig = {
@@ -108,7 +192,11 @@ export async function runPipeline(spec: string): Promise<void> {
   const firstBlock = code.content.match(/```(?:typescript|ts|js)?\n([\s\S]*?)```/);
   const cleanCode = firstBlock ? firstBlock[1].trim() : code.content.replace(/```(?:typescript|ts)?\n?/g, "").replace(/```/g, "").trim();
   await writeFile("src/generated-code.ts", cleanCode, "utf8");
-  if (code.status !== "PASS") await terminate(sessionId, code.status, "code", code);
+  if (code.status !== "PASS") {
+    state = reducer(state, { type: "FAILURE", failedStage: "code", error: code.content });
+    await terminate(sessionId, code.status, "code", code);
+  }
+  state = reducer(state, { type: "CODE_READY", output: code });
 
   // Stage 3: Tests (GLM)
   const testsConfig: PromptConfig = {
@@ -138,7 +226,11 @@ export async function runPipeline(spec: string): Promise<void> {
     .replace(/\.toBe\((\d+\.\d+)\)/g, '.toBeCloseTo($1)')
     .replace(/(import\s*\{[^}]*\}\s*from\s*['"]vitest['"];\n)(\s*import\s*\{[^}]*\}\s*from\s*['"]vitest['"];\n)+/g, '$1');
   await writeFile("src/generated-tests.test.ts", patchedTests, "utf8");
-  if (tests.status !== "PASS") await terminate(sessionId, tests.status, "tests", tests);
+  if (tests.status !== "PASS") {
+    state = reducer(state, { type: "FAILURE", failedStage: "tests", error: tests.content });
+    await terminate(sessionId, tests.status, "tests", tests);
+  }
+  state = reducer(state, { type: "TESTS_READY", output: tests });
 
   // Stage 4: Pre-audit (Nemotron) — systemPrompt overridden internally by mode
   const preAuditConfig: PromptConfig = {
@@ -148,12 +240,20 @@ export async function runPipeline(spec: string): Promise<void> {
   };
   const preAudit = await callNemotron(preAuditConfig, "pre", "audit-pre", 1);
   await writeStage(sessionId, 4, "audit-pre", preAudit);
-  if (preAudit.status === "ESCALATE") await terminate(sessionId, "ESCALATE", "audit-pre", preAudit);
+  if (preAudit.status === "ESCALATE") {
+    state = reducer(state, { type: "FAILURE", failedStage: "audit-pre", error: preAudit.content });
+    await terminate(sessionId, "ESCALATE", "audit-pre", preAudit);
+  }
+  state = reducer(state, { type: "AUDIT_PRE_PASS", output: preAudit });
 
   // Stage 5: VM execution (OrbStack)
   const vmOutput = await runTestsInVM();
   await writeStage(sessionId, 5, "execution", vmOutput);
-  if (vmOutput.status !== "PASS") await terminate(sessionId, vmOutput.status, "execution", vmOutput);
+  if (vmOutput.status !== "PASS") {
+    state = reducer(state, { type: "FAILURE", failedStage: "execution", error: vmOutput.content });
+    await terminate(sessionId, vmOutput.status, "execution", vmOutput);
+  }
+  state = reducer(state, { type: "EXECUTION_COMPLETE", output: vmOutput });
 
   // Stage 6: Post-audit (Nemotron) — systemPrompt overridden internally by mode
   const postAuditConfig: PromptConfig = {
@@ -165,9 +265,11 @@ export async function runPipeline(spec: string): Promise<void> {
   await writeStage(sessionId, 6, "audit-post", postAudit);
 
   if (postAudit.status === "PASS") {
+    state = reducer(state, { type: "AUDIT_POST_PASS", output: postAudit });
     await refreshCanonicalState(sessionId, GEMINI_CACHE_NAME);
     await finalizeSession(sessionId, { verdict: "PASS", summary: postAudit.content.slice(0, 500) });
   } else {
+    state = reducer(state, { type: "AUDIT_POST_FAIL", output: postAudit });
     await terminate(sessionId, postAudit.status, "audit-post", postAudit);
   }
 }
