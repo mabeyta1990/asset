@@ -56,3 +56,28 @@ export interface CanonicalState {
   lastUpdated: string;
   cachePointers: CachePointers;
 }
+
+export type PipelineState =
+  | { status: "idle" }
+  | { status: "researching"; spec: string }
+  | { status: "planning"; researchOutput: StageOutput }
+  | { status: "coding"; researchOutput: StageOutput; planOutput: StageOutput }
+  | { status: "testing"; researchOutput: StageOutput; planOutput: StageOutput; codeOutput: StageOutput }
+  | { status: "auditing_pre"; researchOutput: StageOutput; planOutput: StageOutput; codeOutput: StageOutput; testOutput: StageOutput }
+  | { status: "executing"; researchOutput: StageOutput; planOutput: StageOutput; codeOutput: StageOutput; testOutput: StageOutput; auditPreOutput: StageOutput }
+  | { status: "auditing_post"; researchOutput: StageOutput; planOutput: StageOutput; codeOutput: StageOutput; testOutput: StageOutput; auditPreOutput: StageOutput; executionOutput: StageOutput }
+  | { status: "completed"; stages: Record<StageName, StageOutput>; finalVerdict: StageVerdict }
+  | { status: "failed"; failedStage: StageName; error: string; priorOutputs: Partial<Record<StageName, StageOutput>> };
+
+export type PipelineEvent =
+  | { type: "START"; spec: string }
+  | { type: "RESEARCH_COMPLETE"; output: StageOutput }
+  | { type: "PLAN_READY"; output: StageOutput }
+  | { type: "CODE_READY"; output: StageOutput }
+  | { type: "TESTS_READY"; output: StageOutput }
+  | { type: "AUDIT_PRE_PASS"; output: StageOutput }
+  | { type: "AUDIT_PRE_FAIL"; output: StageOutput }
+  | { type: "EXECUTION_COMPLETE"; output: StageOutput }
+  | { type: "AUDIT_POST_PASS"; output: StageOutput }
+  | { type: "AUDIT_POST_FAIL"; output: StageOutput }
+  | { type: "FAILURE"; failedStage: StageName; error: string };
