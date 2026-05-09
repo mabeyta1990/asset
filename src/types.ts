@@ -2,6 +2,7 @@ export type StageName =
   | "research"
   | "plan"
   | "code"
+  | "type-check"
   | "tests"
   | "audit-pre"
   | "execution"
@@ -61,12 +62,12 @@ export type PipelineState =
   | { status: "idle" }
   | { status: "researching"; spec: string }
   | { status: "planning"; researchOutput: StageOutput }
-  | { status: "coding"; researchOutput: StageOutput; planOutput: StageOutput }
+  | { status: "coding"; researchOutput: StageOutput; planOutput: StageOutput; attempt?: number; latestFeedback?: string; typeCheckOutput?: StageOutput }
   | { status: "testing"; researchOutput: StageOutput; planOutput: StageOutput; codeOutput: StageOutput }
   | { status: "auditing_pre"; researchOutput: StageOutput; planOutput: StageOutput; codeOutput: StageOutput; testOutput: StageOutput }
   | { status: "executing"; researchOutput: StageOutput; planOutput: StageOutput; codeOutput: StageOutput; testOutput: StageOutput; auditPreOutput: StageOutput }
   | { status: "auditing_post"; researchOutput: StageOutput; planOutput: StageOutput; codeOutput: StageOutput; testOutput: StageOutput; auditPreOutput: StageOutput; executionOutput: StageOutput }
-  | { status: "completed"; stages: Record<StageName, StageOutput>; finalVerdict: StageVerdict }
+  | { status: "completed"; stages: Partial<Record<StageName, StageOutput>>; finalVerdict: StageVerdict }
   | { status: "failed"; failedStage: StageName; error: string; priorOutputs: Partial<Record<StageName, StageOutput>> };
 
 export type PipelineEvent =
@@ -80,4 +81,5 @@ export type PipelineEvent =
   | { type: "EXECUTION_COMPLETE"; output: StageOutput }
   | { type: "AUDIT_POST_PASS"; output: StageOutput }
   | { type: "AUDIT_POST_FAIL"; output: StageOutput }
+  | { type: "TYPE_CHECK_FEEDBACK"; output: StageOutput; feedback: string }
   | { type: "FAILURE"; failedStage: StageName; error: string };

@@ -9,6 +9,7 @@ import { callClaude } from "./wrappers/claude.js";
 import { callNemotron } from "./wrappers/nemotron.js";
 
 const GEMINI_CACHE_NAME = "asset-canonical-context";
+const MAX_RETRIES_CODE_GENERATION = 3;
 
 const REQUIRED_ENV_VARS = [
   "ANTHROPIC_API_KEY",
@@ -25,6 +26,91 @@ function assertEnv(): void {
       "Configuration error: one or more required credentials are not set. " +
       "Check your Doppler project setup or .env file.",
     );
+  }
+}
+
+function runTypeCheck(): Promise<StageOutput> {
+  return new Promise((resolve) => {
+    execFile(
+      "./node_modules/.bin/tsc",
+      ["--noEmit", "--project", "tsconfig.json"],
+      { shell: false, timeout: 60_000 },
+      (err, stdout, stderr) => {
+        const content = (stdout + stderr).trim();
+        const exitCode = err == null ? 0 : (typeof err.code === "number" ? err.code : 1);
+        resolve({
+          stage: "type-check",
+          status: exitCode === 0 ? "PASS" : "FAIL",
+          content,
+          usage: {},
+          timestamp: new Date().toISOString(),
+          attempt: 1,
+        });
+      },
+    );
+  });
+}
+
+function parseTscDiagnostics(tscOutput: string): string {
+  const errorLines = tscOutput.split("\n").filter(line => /\(\d+,\d+\): error TS\d+:/.test(line));
+  return errorLines.length > 0 ? errorLines.join("\n") : tscOutput.slice(0, 2000).trim();
+}
+
+function buildCodeRetryTask(spec: string, currentCode: string, feedback: string): string {
+  return [
+    `Implement the following specification:\n\n${spec}`,
+    `\nYour previous attempt had TypeScript compilation errors. Fix all errors and return the complete corrected file.`,
+    `\nCurrent code:\n\`\`\`typescript\n${currentCode}\n\`\`\``,
+    `\nTypeScript errors to fix:\n\`\`\`\n${feedback}\n\`\`\``,
+    `\nReturn ONLY the corrected TypeScript source — no preamble, no markdown fences.`,
+  ].join("\n");
+}
+
+async function refineCodeUntilTypeSafe(
+  initialPromptConfig: PromptConfig,
+  spec: string,
+  sessionId: string,
+  dispatchFeedback: (event: PipelineEvent) => void,
+): Promise<{ codeOutput: StageOutput; cleanCode: string; typeCheckOutput: StageOutput }> {
+  let attempt = 0;
+  let latestCode = "";
+  let latestFeedback = "";
+
+  while (true) {
+    if (attempt >= MAX_RETRIES_CODE_GENERATION) {
+      throw new Error(
+        `Code generation exceeded ${MAX_RETRIES_CODE_GENERATION} type-check retries. Last tsc errors:\n${latestFeedback}`,
+      );
+    }
+
+    const promptConfig: PromptConfig = attempt === 0
+      ? initialPromptConfig
+      : { ...initialPromptConfig, variableTask: buildCodeRetryTask(spec, latestCode, latestFeedback) };
+
+    const codeOutput = await callClaude(promptConfig, "code", attempt + 1);
+    await writeStage(sessionId, 2, "code", codeOutput);
+
+    if (codeOutput.status !== "PASS") {
+      throw new Error(codeOutput.content);
+    }
+
+    const firstBlock = codeOutput.content.match(/```(?:typescript|ts|js)?\n([\s\S]*?)```/);
+    const cleanCode = firstBlock
+      ? firstBlock[1].trim()
+      : codeOutput.content.replace(/```(?:typescript|ts)?\n?/g, "").replace(/```/g, "").trim();
+
+    await writeFile("src/generated-code.ts", cleanCode, "utf8");
+
+    const typeCheckOutput = await runTypeCheck();
+
+    if (typeCheckOutput.status === "PASS") {
+      return { codeOutput, cleanCode, typeCheckOutput };
+    }
+
+    attempt++;
+    latestCode = cleanCode;
+    latestFeedback = parseTscDiagnostics(typeCheckOutput.content);
+    dispatchFeedback({ type: "TYPE_CHECK_FEEDBACK", output: typeCheckOutput, feedback: latestFeedback });
   }
 }
 
@@ -55,6 +141,15 @@ export function reducer(state: PipelineState, event: PipelineEvent): PipelineSta
     case "PLAN_READY":
       if (state.status !== "planning") return state;
       return { status: "coding", researchOutput: state.researchOutput, planOutput: event.output };
+
+    case "TYPE_CHECK_FEEDBACK":
+      if (state.status !== "coding") return state;
+      return {
+        ...state,
+        attempt: (state.attempt ?? 0) + 1,
+        latestFeedback: event.feedback,
+        typeCheckOutput: event.output,
+      };
 
     case "CODE_READY":
       if (state.status !== "coding") return state;
@@ -180,22 +275,30 @@ export async function runPipeline(spec: string): Promise<void> {
   }
   state = reducer(state, { type: "PLAN_READY", output: plan });
 
-  // Stage 2: Code (Claude Opus 4.7)
+  // Stage 2: Code (Claude Opus 4.7 with tsc feedback-threaded retry)
   const codeConfig: PromptConfig = {
     systemPrompt:
       "You are the Scripting stage of the ASSET pipeline. Produce clean, idiomatic TypeScript that satisfies the plan. Respond with only the TypeScript source — no preamble, no markdown fences. Output ONLY the function implementation. No test runner, no runTests(), no TestCase interface, no console.log. Just the exported function. Do not include JSDoc usage examples with asterisks at the end of the file. Only output the function implementation.",
     stableContext: plan.content,
     variableTask: `Implement the following specification:\n\n${spec}`,
   };
-  const code = await callClaude(codeConfig, "code", 1);
-  await writeStage(sessionId, 2, "code", code);
-  const firstBlock = code.content.match(/```(?:typescript|ts|js)?\n([\s\S]*?)```/);
-  const cleanCode = firstBlock ? firstBlock[1].trim() : code.content.replace(/```(?:typescript|ts)?\n?/g, "").replace(/```/g, "").trim();
-  await writeFile("src/generated-code.ts", cleanCode, "utf8");
-  if (code.status !== "PASS") {
-    state = reducer(state, { type: "FAILURE", failedStage: "code", error: code.content });
-    await terminate(sessionId, code.status, "code", code);
-  }
+  const { codeOutput: code, cleanCode } = await refineCodeUntilTypeSafe(
+    codeConfig,
+    spec,
+    sessionId,
+    (event) => { state = reducer(state, event); },
+  ).catch(async (err: unknown) => {
+    const msg = err instanceof Error ? err.message : String(err);
+    const failOutput: StageOutput = {
+      stage: "code",
+      status: "FAIL",
+      content: msg,
+      timestamp: new Date().toISOString(),
+      attempt: MAX_RETRIES_CODE_GENERATION,
+    };
+    state = reducer(state, { type: "FAILURE", failedStage: "code", error: msg });
+    return await terminate(sessionId, "FAIL", "code", failOutput);
+  });
   state = reducer(state, { type: "CODE_READY", output: code });
 
   // Stage 3: Tests (GLM)

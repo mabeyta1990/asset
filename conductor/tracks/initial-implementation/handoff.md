@@ -184,7 +184,7 @@ Handoff: Initial Pipeline Implementation - Phase 4
    - Verify that state transitions are logged or observable if necessary for debugging (optional).
 
   Status
-   - Task State: REVIEW_REQUIRED
+   - Task State: COMPLETED
    - Assigned To: Claude Code
 
   Execution Progress
@@ -240,3 +240,145 @@ Handoff: Initial Pipeline Implementation - Phase 4
 
    - Confirmation: No behavioral change to the running pipeline — only the state
        tracking layer was added. The reducer is pure and side-effect free.
+Handoff: Initial Pipeline Implementation - Phase 4 (Feedback-Threaded Retry Logic - Phase 1)
+
+  Current Task
+   - ID: v2-feedback-threaded-retry-tsc
+   - Title: Implement Feedback-Threaded Retry for `tsc` Errors
+
+  Approved Inputs
+   - Specification: spec.md (./conductor/tracks/initial-implementation/spec.md)
+   - Plan Phase: plan.md (./conductor/tracks/initial-implementation/plan.md)
+   - Detailed Plan: /Users/mikea/.gemini/tmp/asset/cc1e1301-cce8-47d6-a742-9b732ab4750f/plans/feedback-threaded-retry.md
+
+  Files Read for Context
+   - src/types.ts
+   - src/pipeline.ts
+
+  Files Allowed to Change
+   - src/types.ts
+   - src/pipeline.ts
+
+  Files Explicitly Off-Limits
+   - package.json
+   - tsconfig.json
+   - conductor/**
+   - src/wrappers/**
+   - src/memory.ts
+   - src/cache/**
+
+  Constraints
+   - Update `src/types.ts`:
+     - Add `type-check` to `StageName`.
+     - Add `TYPE_CHECK_FEEDBACK` to `PipelineEvent`.
+     - Modify `PipelineState` for `coding` state to include `attempt: number`, `latestFeedback: string` (parsed `tsc` output), and `typeCheckOutput: StageOutput` (raw `tsc` result). Do not create new distinct states for each retry.
+   - Implement `runTypeCheck(): Promise<StageOutput>` in `src/pipeline.ts`. It must use the local project `tsc` binary (`./node_modules/.bin/tsc --noEmit --project tsconfig.json`).
+   - Implement `parseTscDiagnostics(tscOutput: string): string` in `src/pipeline.ts` to extract concise, LLM-friendly error summaries.
+   - Implement `buildCodeRetryTask(spec: string, currentCode: string, feedback: string): string` in `src/pipeline.ts` to reconstruct Claude's `variableTask` fresh on each retry, preventing prompt bloat.
+   - Implement `refineCodeUntilTypeSafe(...)` in `src/pipeline.ts` to encapsulate the retry loop: call Claude, write generated code, run `tsc`, parse diagnostics, dispatch `TYPE_CHECK_FEEDBACK` on failure, and retry until `tsc` passes or `MAX_RETRIES_CODE_GENERATION` is reached.
+   - Replace existing code generation logic in `runPipeline` with a call to `refineCodeUntilTypeSafe`.
+   - Update the `reducer` function to handle `TYPE_CHECK_FEEDBACK` events, updating the `PipelineState` without changing its overall `coding` status.
+   - Define `MAX_RETRIES_CODE_GENERATION` constant in `src/pipeline.ts` (e.g., 3-5 retries).
+
+  Validation Required
+   - `npx tsc --noEmit`: Must pass after changes.
+   - Test Case 1 (Successful Type Check): Pipeline proceeds normally after type-check (1 attempt).
+   - Test Case 2 (Failed Type Check - Retried & Fixed): `tsc` feedback used by Claude, pipeline passes type-check within retry limit. Verify prompt hygiene.
+   - Test Case 3 (Failed Code Generation - Max Retries): Pipeline terminates after `MAX_RETRIES_CODE_GENERATION` attempts with error messages including last `tsc` errors.
+   - Test Case 4 (Error Parsing Robustness): `parseTscDiagnostics` preserves filename, line, column, and message for complex errors.
+
+  Status
+   - Task State: REVIEW_REQUIRED
+   - Assigned To: Claude Code
+
+  Execution Progress
+   - Implementation Notes: |
+       Implemented all Phase 1 components.
+
+       src/types.ts:
+         - Added "type-check" to StageName union.
+         - Added optional fields `attempt?: number`, `latestFeedback?: string`,
+           `typeCheckOutput?: StageOutput` to the `coding` PipelineState variant.
+           Fields are optional so the initial coding state (before any tsc run)
+           requires no change to callers.
+         - Added `TYPE_CHECK_FEEDBACK` event to PipelineEvent carrying the raw
+           StageOutput and parsed feedback string.
+         - Changed `completed.stages` from `Record<StageName, StageOutput>` to
+           `Partial<Record<StageName, StageOutput>>` — required because "type-check"
+           is an internal sub-stage and is not written to the final stages map at
+           pipeline completion.
+
+       src/pipeline.ts:
+         - Added `MAX_RETRIES_CODE_GENERATION = 3` constant.
+         - `runTypeCheck()`: runs `./node_modules/.bin/tsc --noEmit --project tsconfig.json`
+           via execFile, captures stdout+stderr, maps exit code to PASS/FAIL,
+           returns StageOutput with stage "type-check".
+         - `parseTscDiagnostics(tscOutput)`: filters tsc output to lines matching
+           `(<line>,<col>): error TSxxxx:` pattern (preserves filename, line, col,
+           message). Falls back to first 2000 chars of raw output if no error lines
+           match (robustness for unexpected tsc output formats).
+         - `buildCodeRetryTask(spec, currentCode, feedback)`: constructs a
+           fresh variableTask on each retry containing the original spec, the
+           current draft code, and only the latest tsc feedback. Rebuilt per-attempt
+           to prevent prompt bloat.
+         - `refineCodeUntilTypeSafe(initialPromptConfig, spec, sessionId, dispatchFeedback)`:
+           while loop up to MAX_RETRIES_CODE_GENERATION. Attempt 0 uses
+           initialPromptConfig unchanged; subsequent attempts rebuild variableTask
+           via buildCodeRetryTask. On each iteration: calls callClaude, writes
+           stage to session, extracts cleanCode, writes src/generated-code.ts,
+           runs runTypeCheck. On tsc PASS: returns {codeOutput, cleanCode, typeCheckOutput}.
+           On tsc FAIL: increments attempt, updates latestCode/latestFeedback,
+           dispatches TYPE_CHECK_FEEDBACK, loops. On max retries or Claude API
+           failure: throws with last tsc errors in message.
+         - reducer: added `TYPE_CHECK_FEEDBACK` case — guards on `coding` status,
+           spreads existing state, increments attempt, updates latestFeedback and
+           typeCheckOutput. Status remains "coding" (no state transition).
+         - runPipeline Stage 2: replaced direct callClaude+writeFile block with
+           call to refineCodeUntilTypeSafe using .catch() to map any thrown error
+           to a FAILURE dispatch + terminate(). The .catch handler returns
+           Promise<never> (from terminate), so TypeScript infers the success-path
+           binding {codeOutput: code, cleanCode} as non-nullable without assertion.
+           CODE_READY dispatch follows on success path as before.
+
+   - Blockers: None
+
+  Handoff Back to Gemini
+   - Commit Hash: (pending commit)
+   - Files Changed:
+       1. src/types.ts — added "type-check" to StageName; added optional retry
+          fields to coding state; added TYPE_CHECK_FEEDBACK event; widened
+          completed.stages to Partial<Record<StageName, StageOutput>>.
+       2. src/pipeline.ts — added MAX_RETRIES_CODE_GENERATION, runTypeCheck,
+          parseTscDiagnostics, buildCodeRetryTask, refineCodeUntilTypeSafe;
+          updated reducer with TYPE_CHECK_FEEDBACK case; replaced Stage 2 code
+          generation block with refineCodeUntilTypeSafe call.
+
+   - Verification Results:
+       npx tsc --noEmit: passed with no errors after all changes.
+
+       Test Case 1 (Successful type check): On first attempt tsc passes →
+         refineCodeUntilTypeSafe returns after 1 Claude call + 1 tsc run.
+         CODE_READY dispatched. No TYPE_CHECK_FEEDBACK events emitted.
+         Verified by code-path inspection.
+
+       Test Case 2 (Retried & fixed): On tsc FAIL, TYPE_CHECK_FEEDBACK is
+         dispatched with parsed diagnostics, coding state updated with
+         attempt count, latestFeedback, and typeCheckOutput. Next iteration
+         calls buildCodeRetryTask with the latest feedback only — no
+         cumulative prompt growth. Verified by code-path inspection.
+
+       Test Case 3 (Max retries): After attempt >= MAX_RETRIES_CODE_GENERATION
+         (3), throws with message including last tsc errors. Caught by .catch
+         in runPipeline, FAILURE dispatched, terminate() called with FAIL
+         verdict. Verified by code-path inspection.
+
+       Test Case 4 (Error parsing robustness): parseTscDiagnostics filters
+         to lines matching /\(\d+,\d+\): error TS\d+:/, preserving filename,
+         line, col, and message. Falls back to raw output if no matches found.
+         Verified by regex inspection against TSC output format.
+
+   - Confirmation: No behavioral change to any pipeline stage outside Stage 2.
+       All seven primary stages retain identical API call, writeStage, and
+       terminate() patterns. assertEnv() still runs first. reducer handles
+       all existing event types unchanged. The only new reducer case is
+       TYPE_CHECK_FEEDBACK, which is a no-op outside the coding state.
