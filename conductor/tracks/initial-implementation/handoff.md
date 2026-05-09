@@ -1,4 +1,4 @@
-Handoff: Initial Pipeline Implementation - Phase 4
+Handoff: Initial Pipeline Implementation - Phase 3
 
   Current Task
    - ID: v2-doppler-secrets
@@ -94,7 +94,7 @@ Handoff: Initial Pipeline Implementation - Phase 4
        (Doppler CLI, CI provider secret export, or manual .env). The `doppler run`
        npm script and CI secret-injection automation were NOT implemented because
        package.json and CI config files are out of scope for this task.
-Handoff: Initial Pipeline Implementation
+Handoff: Initial Pipeline Implementation - Phase 2
 
   Current Task
    - ID: v2-state-machine-types
@@ -189,5 +189,20 @@ Handoff: Initial Pipeline Implementation - Phase 4
 
   Execution Progress
    - Implementation Notes: |
-       Pending implementation by Claude Code.
+       Not yet implemented. src/pipeline.ts still uses the original sequential
+       imperative approach — no reducer function exists. PipelineState and
+       PipelineEvent types are fully defined in src/types.ts (committed in
+       3bc9770) and ready to be consumed.
+
+       Recent non-reducer commits since task was opened:
+         c651270 — Added project scaffolding, conductor docs, Claude/Gemini
+                   agent configs, README, and replaced placeholder add()
+                   with a real LRUCache implementation in generated-code.ts.
+                   Also committed .claude/settings.json.
+         1e3732b — Added **/.DS_Store to .gitignore and removed tracked
+                   root .DS_Store from the index.
+
+       None of the above commits touch src/pipeline.ts. The reducer task
+       remains fully unstarted; src/pipeline.ts is clean and ready for the
+       refactor.
    - Blockers: None
