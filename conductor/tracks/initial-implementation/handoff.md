@@ -41,7 +41,7 @@ Handoff: Initial Pipeline Implementation - Phase 4
    - No secret values are logged.
 
   Status
-   - Task State: REVIEW_REQUIRED
+   - Task State: COMPLETED
    - Assigned To: Claude Code
 
   Execution Progress
@@ -62,6 +62,7 @@ Handoff: Initial Pipeline Implementation - Phase 4
    - Blockers: None
 
   Handoff Back to Gemini
+   - Commit Hash: 43dc1fe
    - Files Changed:
        1. .env.example (created) — lists all 5 required vars with blank values;
           includes Doppler local-dev and CI usage instructions as comments.
@@ -140,3 +141,53 @@ Handoff: Initial Pipeline Implementation
   Handoff Back to Gemini
    - Summary of Changes: Added exhaustive PipelineState and PipelineEvent types to support the v2 state machine refactor.
    - Verification Results: npx tsc --noEmit passed; types confirmed to match spec requirements.
+
+Handoff: Initial Pipeline Implementation - Phase 4
+
+  Current Task
+   - ID: v2-state-machine-reducer
+   - Title: Implement State Machine Reducer and Refactor Pipeline
+
+  Approved Inputs
+   - Specification: spec.md (./conductor/tracks/initial-implementation/spec.md)
+   - Plan Phase: plan.md (./conductor/tracks/initial-implementation/plan.md)
+   - Types: src/types.ts
+
+  Files Read for Context
+   - src/pipeline.ts
+   - src/types.ts
+
+  Files Allowed to Change
+   - src/pipeline.ts
+
+  Files Explicitly Off-Limits
+   - package.json
+   - tsconfig.json
+   - conductor/**
+   - src/wrappers/**
+   - src/memory.ts
+   - src/cache/**
+   - src/types.ts
+
+  Constraints
+   - Implement a pure `reducer(state: PipelineState, event: PipelineEvent): PipelineState` function in `src/pipeline.ts`.
+   - The reducer must handle all `PipelineEvent` types and transition to the appropriate `PipelineState`.
+   - Refactor `runPipeline(spec: string)` to use this reducer for managing the pipeline flow.
+   - Preserve all existing functionality: Research, Plan, Code, Tests, Audit (Pre/Post), and VM Execution.
+   - Use the `PipelineState` to carry outputs from one stage to the next (e.g., `planning` state should hold `researchOutput`).
+   - Ensure `assertEnv()` is still called at the start.
+   - Maintain existing error handling and termination logic, but integrate it with the `failed` state.
+
+  Validation Required
+   - `npx tsc`: Ensure no type errors.
+   - The pipeline must still complete successfully from end-to-end (simulated or real).
+   - Verify that state transitions are logged or observable if necessary for debugging (optional).
+
+  Status
+   - Task State: IN_PROGRESS
+   - Assigned To: Claude Code
+
+  Execution Progress
+   - Implementation Notes: |
+       Pending implementation by Claude Code.
+   - Blockers: None

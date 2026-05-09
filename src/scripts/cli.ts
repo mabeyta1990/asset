@@ -7,7 +7,9 @@ if (!spec) {
   process.exit(1);
 }
 
-runPipeline(spec).catch((err: unknown) => {
+runPipeline(spec).then(() => {
+  console.log("[PASS] Pipeline completed successfully");
+}).catch((err: unknown) => {
   console.error("Pipeline error:", err instanceof Error ? err.message : String(err));
   process.exit(1);
 });

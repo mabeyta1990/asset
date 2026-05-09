@@ -4,3 +4,5 @@ node_modules/
 .ai-memory/
 dist/
 *.log
+roadmap-research.md
+docs/roadmap-research.md
