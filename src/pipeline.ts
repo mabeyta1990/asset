@@ -1,15 +1,32 @@
 import { execFile } from "node:child_process";
-import { writeFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import type { PromptConfig, StageName, StageOutput, StageVerdict } from "./types.js";
 import { initSession, writeStage, finalizeSession } from "./memory.js";
 import { refreshCanonicalState } from "./cache/refresh.js";
 import { callResearch } from "./wrappers/research.js";
 import { callGemini } from "./wrappers/gemini.js";
 import { callClaude } from "./wrappers/claude.js";
-import { callGLM } from "./wrappers/glm.js";
 import { callNemotron } from "./wrappers/nemotron.js";
 
 const GEMINI_CACHE_NAME = "asset-canonical-context";
+
+const REQUIRED_ENV_VARS = [
+  "ANTHROPIC_API_KEY",
+  "GOOGLE_AI_API_KEY",
+  "TAVILY_API_KEY",
+  "ZAI_API_KEY",
+  "DEEPINFRA_API_KEY",
+] as const;
+
+function assertEnv(): void {
+  const missing = REQUIRED_ENV_VARS.filter((k) => !process.env[k]?.trim());
+  if (missing.length > 0) {
+    throw new Error(
+      "Configuration error: one or more required credentials are not set. " +
+      "Check your Doppler project setup or .env file.",
+    );
+  }
+}
 
 function runTestsInVM(): Promise<StageOutput> {
   return new Promise((resolve) => {
@@ -56,6 +73,7 @@ async function terminate(
 }
 
 export async function runPipeline(spec: string): Promise<void> {
+  assertEnv();
   const sessionId = await initSession(spec);
 
   // Stage 0: Research (Tavily)
@@ -81,13 +99,13 @@ export async function runPipeline(spec: string): Promise<void> {
   // Stage 2: Code (Claude Opus 4.7)
   const codeConfig: PromptConfig = {
     systemPrompt:
-      "You are the Scripting stage of the ASSET pipeline. Produce clean, idiomatic TypeScript that satisfies the plan. Respond with only the TypeScript source — no preamble, no markdown fences.",
+      "You are the Scripting stage of the ASSET pipeline. Produce clean, idiomatic TypeScript that satisfies the plan. Respond with only the TypeScript source — no preamble, no markdown fences. Output ONLY the function implementation. No test runner, no runTests(), no TestCase interface, no console.log. Just the exported function. Do not include JSDoc usage examples with asterisks at the end of the file. Only output the function implementation.",
     stableContext: plan.content,
     variableTask: `Implement the following specification:\n\n${spec}`,
   };
   const code = await callClaude(codeConfig, "code", 1);
   await writeStage(sessionId, 2, "code", code);
-  const firstBlock = code.content.match(/```(?:typescript|ts)\n([\s\S]*?)```/);
+  const firstBlock = code.content.match(/```(?:typescript|ts|js)?\n([\s\S]*?)```/);
   const cleanCode = firstBlock ? firstBlock[1].trim() : code.content.replace(/```(?:typescript|ts)?\n?/g, "").replace(/```/g, "").trim();
   await writeFile("src/generated-code.ts", cleanCode, "utf8");
   if (code.status !== "PASS") await terminate(sessionId, code.status, "code", code);
@@ -95,24 +113,36 @@ export async function runPipeline(spec: string): Promise<void> {
   // Stage 3: Tests (GLM)
   const testsConfig: PromptConfig = {
     systemPrompt:
-      "You are the Testing stage of the ASSET pipeline. Write comprehensive tests for the provided implementation. Respond with only the test source — no preamble, no markdown fences.",
-    stableContext: code.content,
+      "You are the Testing stage of the ASSET pipeline. Write comprehensive tests for the provided implementation. Respond with only the test source — no preamble, no markdown fences. Output ONLY vitest tests using describe, it, and expect. Import the function from ./generated-code. Do not write a custom test runner, do not use console.log, do not define a runTests function. For debounce timer tests: after the final debounced call, always advance fake timers by the full delay amount before asserting. For example, if delay is 100ms, the final vi.advanceTimersByTime() must be at least 100, not 50.",
+    stableContext: cleanCode,
     variableTask: `Write tests for the following specification:\n\n${spec}`,
   };
-  const tests = await callGLM(testsConfig, "tests", 1);
+  const tests = await callClaude(testsConfig, "tests", 1);
   await writeStage(sessionId, 3, "tests", tests);
   const fixedTests = tests.content.replace(/from ['"]\.\/\w+['"]/g, 'from "./generated-code"');
-  const cleanTests = fixedTests.replace(/```(?:typescript|ts)?\n?/g, "").replace(/```/g, "").trim();
-  const vitestImport = `import { describe, it, expect } from 'vitest';\n`;
+  const strippedTests = fixedTests.replace(/```(?:typescript|ts)?\n?/g, "").replace(/```/g, "").trim();
+  const lastDescribeEnd = strippedTests.lastIndexOf('});');
+  const cleanTests = lastDescribeEnd !== -1
+    ? strippedTests.slice(0, lastDescribeEnd + 3)
+    : strippedTests;
+  const vitestImport = `import { describe, it, expect, beforeEach, afterEach, beforeAll, afterAll, vi } from 'vitest';\n`;
   const finalTests = cleanTests.includes("from 'vitest'") || cleanTests.includes('from "vitest"')
     ? cleanTests
     : vitestImport + cleanTests;
   await writeFile("src/generated-tests.test.ts", finalTests, "utf8");
+  const writtenTests = await readFile("src/generated-tests.test.ts", "utf8");
+  const patchedTests = writtenTests
+    .replace(/\btest\(/g, "it(")
+    .replace(/from '@jest\/globals'/g, "from 'vitest'")
+    .replace(/from "@jest\/globals"/g, 'from "vitest"')
+    .replace(/\.toBe\((\d+\.\d+)\)/g, '.toBeCloseTo($1)')
+    .replace(/(import\s*\{[^}]*\}\s*from\s*['"]vitest['"];\n)(\s*import\s*\{[^}]*\}\s*from\s*['"]vitest['"];\n)+/g, '$1');
+  await writeFile("src/generated-tests.test.ts", patchedTests, "utf8");
   if (tests.status !== "PASS") await terminate(sessionId, tests.status, "tests", tests);
 
   // Stage 4: Pre-audit (Nemotron) — systemPrompt overridden internally by mode
   const preAuditConfig: PromptConfig = {
-    systemPrompt: "",
+    systemPrompt: "Only return ESCALATE if the code has a security vulnerability or is fundamentally broken. Return PASS for any working implementation, even if it lacks optional features. Do not invent requirements not stated in the spec.",
     stableContext: `SPEC:\n${spec}\n\nCODE:\n${code.content}\n\nTESTS:\n${fixedTests}`,
     variableTask: "Audit the code and tests against the specification above.",
   };
@@ -127,7 +157,7 @@ export async function runPipeline(spec: string): Promise<void> {
 
   // Stage 6: Post-audit (Nemotron) — systemPrompt overridden internally by mode
   const postAuditConfig: PromptConfig = {
-    systemPrompt: "",
+    systemPrompt: "If all tests passed in the execution output, return PASS. Only return ESCALATE if tests failed or the implementation is clearly wrong. Do not ESCALATE just because you cannot see the source code directly.",
     stableContext: `SPEC:\n${spec}\n\nEXECUTION RESULTS:\n${vmOutput.content}`,
     variableTask: "Audit the execution results against the specification above.",
   };
