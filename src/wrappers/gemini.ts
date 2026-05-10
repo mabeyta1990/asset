@@ -3,7 +3,7 @@ import { GoogleAICacheManager } from "@google/generative-ai/server";
 import type { CachedContent } from "@google/generative-ai/server";
 import type { PromptConfig, StageName, StageOutput } from "../types.js";
 
-const MODEL = "models/gemini-2.5-pro";
+const MODEL = "models/gemini-1.5-flash";
 const CACHE_TTL_SECONDS = 86_400;
 const EXPIRY_BUFFER_MS = 60_000;
 const DEFAULT_DISPLAY_NAME = "asset-canonical-context";

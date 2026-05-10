@@ -50,6 +50,17 @@ A session is written to disk at each stage. If any stage returns `ESCALATE`, the
 npm run asset "Write a TypeScript function that debounces a callback by N milliseconds"
 ```
 
+## Integrating ASSET into your repository
+
+To add ASSET to an existing project:
+
+1. Copy the `conductor/` directory and its contents from the ASSET repository.
+2. Update the `conductor/product.md` and `conductor/tech-stack.md` to reflect your project's specific goals and technologies.
+3. Configure your environment variables to include the required API keys (Anthropic, Google Generative AI, Tavily, Nemotron).
+4. Ensure your project has `vitest` installed and that you have an isolated environment (like OrbStack or similar) configured as expected by the pipeline.
+5. Add the necessary `package.json` scripts to trigger the pipeline, referencing the `asset` entry point.
+6. Create an initial track in `conductor/tracks/` to define your first project objective.
+
 On success:
 
 ```

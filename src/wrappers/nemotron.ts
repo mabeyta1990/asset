@@ -4,7 +4,7 @@ import type { PromptConfig, StageName, StageOutput, StageVerdict } from "../type
 const ENDPOINT = "https://api.deepinfra.com/v1/openai/chat/completions";
 const MODEL = "nvidia/Llama-3.1-Nemotron-70B-Instruct";
 const MAX_BUFFER = 50 * 1024 * 1024;
-const MAX_TOKENS = 4096;
+const MAX_TOKENS = 8192;
 
 const apiKey = process.env.DEEPINFRA_API_KEY ?? "";
 
@@ -108,6 +108,42 @@ function extractVerdict(content: string): StageVerdict {
   const v = match[1].toUpperCase();
   if (v === "PASS" || v === "FAIL" || v === "ESCALATE") return v;
   return "ESCALATE";
+}
+
+export async function callNemotronPlan(
+  config: PromptConfig,
+  attempt = 1,
+): Promise<StageOutput> {
+  const systemPrompt = "You are the Strategy stage of the ASSET pipeline. Produce a numbered implementation plan with explicit, testable acceptance criteria. Respond with the plan only.";
+  const messages: NemotronMessage[] = [
+    { role: "system", content: systemPrompt },
+    { role: "user", content: config.stableContext ? `${config.stableContext}\n\n${config.variableTask}` : config.variableTask },
+  ];
+
+  const body = JSON.stringify({
+    model: MODEL,
+    stream: false,
+    max_tokens: MAX_TOKENS,
+    messages,
+  });
+
+  const stdout = await curlPost(body);
+  const response = parseResponse(stdout);
+
+  const content = response.choices[0]?.message.content ?? "";
+
+  return {
+    stage: "plan",
+    status: "PASS",
+    content,
+    usage: {
+      prompt_tokens: response.usage.prompt_tokens,
+      completion_tokens: response.usage.completion_tokens,
+      total_tokens: response.usage.total_tokens,
+    },
+    timestamp: new Date().toISOString(),
+    attempt,
+  };
 }
 
 export async function callNemotron(

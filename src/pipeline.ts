@@ -9,7 +9,7 @@ import { getRepoId, checkContextChange } from "./context-hash.js";
 import { callResearch } from "./wrappers/research.js";
 import { callGemini } from "./wrappers/gemini.js";
 import { callClaude } from "./wrappers/claude.js";
-import { callNemotron } from "./wrappers/nemotron.js";
+import { callNemotron, callNemotronPlan } from "./wrappers/nemotron.js";
 import { buildResearchConfig, buildPlanConfig, buildCodeConfig, buildTestsConfig, buildAuditPreConfig, buildAuditPostConfig } from "./prompts/registry.js";
 
 const GEMINI_CACHE_NAME = "asset-canonical-context";
@@ -376,9 +376,9 @@ export async function runPipeline(spec: string): Promise<void> {
   }
   state = reducer(state, { type: "RESEARCH_COMPLETE", output: research });
 
-  // Stage 1: Plan (Gemini 2.5 Pro)
+  // Stage 1: Plan (Llama-3.3-Nemotron-Super-49B-v1.5)
   const planConfig = buildPlanConfig(research.content, spec);
-  const plan = await withTiming(() => callGemini(planConfig, "plan", 1, { displayName: GEMINI_CACHE_NAME }));
+  const plan = await withTiming(() => callNemotronPlan(planConfig, 1));
   await writeStage(sessionId, 1, "plan", plan);
   if (plan.status !== "PASS") {
     state = reducer(state, { type: "FAILURE", failedStage: "plan", error: plan.content });

@@ -1,7 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import type { PromptConfig, ClaudeUsage, StageOutput, StageName } from "../types.js";
 
-const MODEL = "claude-opus-4-7";
+const MODEL = "claude-haiku-4-5-20251001";
 const MAX_TOKENS = 4096;
 
 const client = new Anthropic();
