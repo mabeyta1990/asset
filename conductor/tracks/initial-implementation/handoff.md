@@ -51,9 +51,10 @@ None.
 
 ## Local Verification
 - Type-check: PASS (npx tsc --noEmit)
-- Unit tests: PASS (vitest — 31 tests)
+- Unit tests: PASS (vitest — 32 tests, +1 invalidation-failure test)
 - Verification command: npx tsc --noEmit && npx vitest run
 - Verified on: 2026-05-09
+- Invalidation-failure test: PASS (src/context-hash.invalidation.test.ts — commit 3d96941)
 
 ## Handoff Back to Gemini
 Implementation complete. All tasks in the handoff are fulfilled:
