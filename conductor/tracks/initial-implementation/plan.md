@@ -26,9 +26,9 @@
         - *Constraint:* Max 3 retries for the entire loop (defined by `MAX_RETRIES_TEST_FAILURE`).
         - *Constraint:* Regenerated code MUST trigger a re-run of Stage 3 (Tests), Stage 4 (Pre-audit), Stage 5 (Execution), and Stage 6 (Post-audit).
     - [x] Update `buildCodeRetryTask` to handle both `tsc` and `vitest` feedback types cleanly.
-- [ ] **Finalize Trust Gate & Promotion Logic**
-    - [ ] Ensure `src/cache/refresh.ts` only updates canonical state on a Stage 6 (Post-audit) PASS.
-    - [ ] Implement atomic promotion: Use temporary staging for canonical updates; never overwrite or pollute with failed/in-flight run data.
+- [x] **Finalize Trust Gate & Promotion Logic**
+    - [x] Ensure `src/cache/refresh.ts` only updates canonical state on a Stage 6 (Post-audit) PASS.
+    - [x] Implement atomic promotion: Use temporary staging for canonical updates; never overwrite or pollute with failed/in-flight run data.
 
 ---
 
@@ -39,17 +39,23 @@
     - [x] Core code implementation (Preflight checks and `assertEnv` at orchestration boundary).
     - [ ] User/CI setup for Doppler CLI (Environment/Injection configuration).
 - [ ] **Repo Context Bootstrap + Repo-Scoped Invalidation**
-    - [ ] Implement repo-scoped canonical state and cache metadata initialization.
+    - [x] Implement repo-scoped canonical state and cache metadata initialization. (Implemented; verification pending)
         - *Requirement:* All cache namespaces and canonical paths must be scoped by repo identity.
-    - [ ] Create `src/scripts/bootstrap.ts` for first-time project link/setup.
-    - [ ] Implement stable context ingestion (README, architecture, schema, etc.) using content hashing.
-    - [ ] Build hashing logic for change detection (stable context vs. cached metadata) to trigger refresh.
+    - [x] Create `src/scripts/bootstrap.ts` for first-time project link/setup. (Implemented)
+    - [x] Implement stable context ingestion (README, architecture, schema, etc.) using content hashing. (Implemented)
+    - [x] Build hashing logic for change detection (stable context vs. cached metadata) to trigger refresh. (Implemented)
+    - Note: Local verification (tsc & vitest) recorded; live-run invalidation behavior still pending verification.
 - [ ] **Sandbox Hardening**
     - [ ] Enhance OrbStack/Ubuntu VM isolation.
         - *Requirement:* Restricted repo mounts (Read-only for host repo → VM `/workspace`).
         - *Requirement:* Network isolation for untrusted code execution.
 - [ ] **Telemetry & Monitoring**
     - [ ] Implement lightweight telemetry hooks/interfaces in `pipeline.ts` for per-run cost and performance monitoring.
+
+## Verification & Next Steps for Phase 5
+- Local verification completed: Type-check and unit tests passed (see handoff.md).
+- Next: run full pipeline in sandbox/CI to validate context-manifest invalidation and fatal error propagation on invalidation failures.
+- After successful live verification, mark Phase 5 repo-context tasks as DONE and attach CI logs.
 
 ---
 
