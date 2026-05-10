@@ -58,9 +58,11 @@ All Phase 5 repo-context tasks are complete and locally verified:
     - *Requirement:* Network isolation for untrusted code execution.
 
 ### Telemetry & Monitoring (IN PROGRESS)
-- [ ] Implement lightweight telemetry hooks/interfaces in `pipeline.ts` for per-run cost and performance monitoring.
-    - *Requirement:* Track duration and token usage per stage.
-    - *Requirement:* Summarize total session cost/latency.
+- [ ] Implement telemetry hooks/interfaces for tracking operational data.
+    - *Requirement:* Capture `durationMs` for every pipeline stage execution.
+    - *Requirement:* Capture normalized token usage (prompt/completion) for every model (Gemini, Copilot, Claude) per-run.
+    - *Requirement:* Implement cost tracking per-model (where pricing is available). If pricing is unavailable, normalized token tracking is sufficient.
+    - *Requirement:* Aggregate and report total session cost/latency.
 
 ---
 
