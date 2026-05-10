@@ -1,10 +1,12 @@
 import Anthropic from "@anthropic-ai/sdk";
 import type { PromptConfig, ClaudeUsage, StageOutput, StageName } from "../types.js";
 
-const MODEL = "claude-haiku-4-5-20251001";
+const MODEL = "claude-haiku-4-5";
 const MAX_TOKENS = 4096;
 
-const client = new Anthropic();
+const client = new Anthropic({
+  apiKey: process.env.ANTHROPIC_API_KEY,
+});
 
 export async function callClaude(
   config: PromptConfig,
@@ -17,7 +19,7 @@ export async function callClaude(
     system: [
       {
         type: "text",
-        text: config.systemPrompt,
+        text: config.systemPrompt + "\n\n" + config.stableContext,
         cache_control: { type: "ephemeral" },
       },
     ],
@@ -25,11 +27,6 @@ export async function callClaude(
       {
         role: "user",
         content: [
-          {
-            type: "text",
-            text: config.stableContext,
-            cache_control: { type: "ephemeral" },
-          },
           {
             type: "text",
             text: config.variableTask,
@@ -88,7 +85,7 @@ written directly to a file by the Trust gate on PASS.
 
 Stability contract: this system prompt and the codebase context block that follows are
 stable across all pipeline runs and are eligible for prompt caching. Only the task block
-that follows the codebase context changes per run.`.repeat(2); // repeat to ensure >1024 tokens
+that follows the codebase context changes per run.`.repeat(6); // repeat to ensure >=4096 tokens for Haiku 4.5
 
 const SMOKE_CONTEXT = `Codebase context (canonical state as of last approved build):
 
@@ -119,7 +116,7 @@ All wrappers must return StageOutput. Failures surface as status "FAIL" or "ERRO
 content containing the error message. The pipeline retries up to maxAttempts (default 3).
 
 This context block is stable and cached. Do not modify it mid-session. The next block
-contains the variable task for this run.`.repeat(3); // repeat to ensure >1024 tokens
+contains the variable task for this run.`.repeat(7); // repeat to ensure >=4096 tokens for Haiku 4.5
 
 async function runSmokeTest(): Promise<void> {
   console.log("Claude wrapper smoke test");

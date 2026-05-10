@@ -24,6 +24,7 @@ Status of the initial pipeline implementation roadmap for the ASSET project.
 ### Phase 6: Optimization & Validation (In Progress)
 - [x] **Prompt Optimization:** Refactored hardcoded prompts to registry and implemented two-stage audit split.
 - [x] **Final E2E Validation:** End-to-end smoke test validation and performance envelope verification.
+- [x] **Claude Prompt Caching:** Fixed Haiku 4.5 caching by meeting 4096-token minimum floor in stable blocks.
 - [ ] **Surgical File Edits**
     - [ ] Add task-spec support for `mode: "create" | "patch"`.
     - [ ] Define patch payload schema, preferably `{ find: string, replace: string }[]`.
