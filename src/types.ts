@@ -62,7 +62,7 @@ export type PipelineState =
   | { status: "idle" }
   | { status: "researching"; spec: string }
   | { status: "planning"; researchOutput: StageOutput }
-  | { status: "coding"; researchOutput: StageOutput; planOutput: StageOutput; attempt?: number; latestFeedback?: string; typeCheckOutput?: StageOutput }
+  | { status: "coding"; researchOutput: StageOutput; planOutput: StageOutput; attempt?: number; latestFeedback?: string; typeCheckOutput?: StageOutput; latestTestFeedback?: string }
   | { status: "testing"; researchOutput: StageOutput; planOutput: StageOutput; codeOutput: StageOutput }
   | { status: "auditing_pre"; researchOutput: StageOutput; planOutput: StageOutput; codeOutput: StageOutput; testOutput: StageOutput }
   | { status: "executing"; researchOutput: StageOutput; planOutput: StageOutput; codeOutput: StageOutput; testOutput: StageOutput; auditPreOutput: StageOutput }
@@ -82,4 +82,5 @@ export type PipelineEvent =
   | { type: "AUDIT_POST_PASS"; output: StageOutput }
   | { type: "AUDIT_POST_FAIL"; output: StageOutput }
   | { type: "TYPE_CHECK_FEEDBACK"; output: StageOutput; feedback: string }
+  | { type: "TEST_FEEDBACK"; output: StageOutput; feedback: string }
   | { type: "FAILURE"; failedStage: StageName; error: string };

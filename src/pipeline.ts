@@ -10,6 +10,7 @@ import { callNemotron } from "./wrappers/nemotron.js";
 
 const GEMINI_CACHE_NAME = "asset-canonical-context";
 const MAX_RETRIES_CODE_GENERATION = 3;
+const MAX_RETRIES_TEST_FAILURE = 3;
 
 const REQUIRED_ENV_VARS = [
   "ANTHROPIC_API_KEY",
@@ -56,14 +57,43 @@ function parseTscDiagnostics(tscOutput: string): string {
   return errorLines.length > 0 ? errorLines.join("\n") : tscOutput.slice(0, 2000).trim();
 }
 
-function buildCodeRetryTask(spec: string, currentCode: string, feedback: string): string {
-  return [
-    `Implement the following specification:\n\n${spec}`,
-    `\nYour previous attempt had TypeScript compilation errors. Fix all errors and return the complete corrected file.`,
-    `\nCurrent code:\n\`\`\`typescript\n${currentCode}\n\`\`\``,
-    `\nTypeScript errors to fix:\n\`\`\`\n${feedback}\n\`\`\``,
-    `\nReturn ONLY the corrected TypeScript source — no preamble, no markdown fences.`,
-  ].join("\n");
+function parseVitestDiagnostics(vitestOutput: string): string {
+  const lines = vitestOutput.split("\n");
+  const kept: string[] = [];
+  let capturing = false;
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (/^\s*FAIL\s+/.test(line) || /⎯+ Failed Tests/.test(line)) capturing = true;
+    if (/^(Test Files|Tests|Duration|Start at)\s/.test(trimmed)) { capturing = false; continue; }
+    if (capturing) {
+      if (/node_modules\/(vitest|@vitest)/.test(line)) continue;
+      kept.push(line);
+    }
+  }
+
+  while (kept.length > 0 && kept[kept.length - 1].trim() === "") kept.pop();
+  const parsed = kept.join("\n").trim();
+  return parsed.length > 0 ? parsed.slice(0, 3000) : vitestOutput.slice(0, 3000).trim();
+}
+
+function buildCodeRetryTask(
+  spec: string,
+  currentCode: string,
+  tscFeedback?: string,
+  testFeedback?: string,
+): string {
+  const parts: string[] = [`Implement the following specification:\n\n${spec}`];
+  if (tscFeedback || testFeedback) {
+    parts.push(
+      `\nYour previous attempt had issues. Fix all errors and return the complete corrected file.`,
+      `\nCurrent code:\n\`\`\`typescript\n${currentCode}\n\`\`\``,
+    );
+    if (tscFeedback) parts.push(`\nTypeScript compilation errors to fix:\n\`\`\`\n${tscFeedback}\n\`\`\``);
+    if (testFeedback) parts.push(`\nVitest test failures to fix:\n\`\`\`\n${testFeedback}\n\`\`\``);
+  }
+  parts.push(`\nReturn ONLY the corrected TypeScript source — no preamble, no markdown fences.`);
+  return parts.join("\n");
 }
 
 async function refineCodeUntilTypeSafe(
@@ -71,21 +101,24 @@ async function refineCodeUntilTypeSafe(
   spec: string,
   sessionId: string,
   dispatchFeedback: (event: PipelineEvent) => void,
+  priorCode?: string,
+  priorTestFeedback?: string,
 ): Promise<{ codeOutput: StageOutput; cleanCode: string; typeCheckOutput: StageOutput }> {
   let attempt = 0;
-  let latestCode = "";
-  let latestFeedback = "";
+  let latestCode = priorCode ?? "";
+  let latestTscFeedback = "";
+  let pendingTestFeedback = priorTestFeedback;
 
   while (true) {
     if (attempt >= MAX_RETRIES_CODE_GENERATION) {
       throw new Error(
-        `Code generation exceeded ${MAX_RETRIES_CODE_GENERATION} type-check retries. Last tsc errors:\n${latestFeedback}`,
+        `Code generation exceeded ${MAX_RETRIES_CODE_GENERATION} type-check retries. Last tsc errors:\n${latestTscFeedback}`,
       );
     }
 
-    const promptConfig: PromptConfig = attempt === 0
+    const promptConfig: PromptConfig = (attempt === 0 && !pendingTestFeedback)
       ? initialPromptConfig
-      : { ...initialPromptConfig, variableTask: buildCodeRetryTask(spec, latestCode, latestFeedback) };
+      : { ...initialPromptConfig, variableTask: buildCodeRetryTask(spec, latestCode, latestTscFeedback || undefined, pendingTestFeedback) };
 
     const codeOutput = await callClaude(promptConfig, "code", attempt + 1);
     await writeStage(sessionId, 2, "code", codeOutput);
@@ -109,8 +142,9 @@ async function refineCodeUntilTypeSafe(
 
     attempt++;
     latestCode = cleanCode;
-    latestFeedback = parseTscDiagnostics(typeCheckOutput.content);
-    dispatchFeedback({ type: "TYPE_CHECK_FEEDBACK", output: typeCheckOutput, feedback: latestFeedback });
+    latestTscFeedback = parseTscDiagnostics(typeCheckOutput.content);
+    pendingTestFeedback = undefined;
+    dispatchFeedback({ type: "TYPE_CHECK_FEEDBACK", output: typeCheckOutput, feedback: latestTscFeedback });
   }
 }
 
@@ -149,6 +183,15 @@ export function reducer(state: PipelineState, event: PipelineEvent): PipelineSta
         attempt: (state.attempt ?? 0) + 1,
         latestFeedback: event.feedback,
         typeCheckOutput: event.output,
+      };
+
+    case "TEST_FEEDBACK":
+      if (state.status !== "executing") return state;
+      return {
+        status: "coding",
+        researchOutput: state.researchOutput,
+        planOutput: state.planOutput,
+        latestTestFeedback: event.feedback,
       };
 
     case "CODE_READY":
@@ -275,88 +318,111 @@ export async function runPipeline(spec: string): Promise<void> {
   }
   state = reducer(state, { type: "PLAN_READY", output: plan });
 
-  // Stage 2: Code (Claude Opus 4.7 with tsc feedback-threaded retry)
+  // Base code config (reused across vitest retries)
   const codeConfig: PromptConfig = {
     systemPrompt:
       "You are the Scripting stage of the ASSET pipeline. Produce clean, idiomatic TypeScript that satisfies the plan. Respond with only the TypeScript source — no preamble, no markdown fences. Output ONLY the function implementation. No test runner, no runTests(), no TestCase interface, no console.log. Just the exported function. Do not include JSDoc usage examples with asterisks at the end of the file. Only output the function implementation.",
     stableContext: plan.content,
     variableTask: `Implement the following specification:\n\n${spec}`,
   };
-  const { codeOutput: code, cleanCode } = await refineCodeUntilTypeSafe(
-    codeConfig,
-    spec,
-    sessionId,
-    (event) => { state = reducer(state, event); },
-  ).catch(async (err: unknown) => {
-    const msg = err instanceof Error ? err.message : String(err);
-    const failOutput: StageOutput = {
-      stage: "code",
-      status: "FAIL",
-      content: msg,
-      timestamp: new Date().toISOString(),
-      attempt: MAX_RETRIES_CODE_GENERATION,
+
+  // Outer retry loop: Stages 2-5 repeat on vitest failure
+  let testRetryCount = 0;
+  let priorCleanCode: string | undefined;
+  let latestTestFeedback: string | undefined;
+  let vmOutput!: StageOutput;
+
+  while (true) {
+    // Stage 2: Code (Claude Opus 4.7 with tsc feedback-threaded retry)
+    const { codeOutput: code, cleanCode } = await refineCodeUntilTypeSafe(
+      codeConfig,
+      spec,
+      sessionId,
+      (event) => { state = reducer(state, event); },
+      priorCleanCode,
+      latestTestFeedback,
+    ).catch(async (err: unknown) => {
+      const msg = err instanceof Error ? err.message : String(err);
+      const failOutput: StageOutput = {
+        stage: "code",
+        status: "FAIL",
+        content: msg,
+        timestamp: new Date().toISOString(),
+        attempt: MAX_RETRIES_CODE_GENERATION,
+      };
+      state = reducer(state, { type: "FAILURE", failedStage: "code", error: msg });
+      return await terminate(sessionId, "FAIL", "code", failOutput);
+    });
+    state = reducer(state, { type: "CODE_READY", output: code });
+
+    // Stage 3: Tests (GLM)
+    const testsConfig: PromptConfig = {
+      systemPrompt:
+        "You are the Testing stage of the ASSET pipeline. Write comprehensive tests for the provided implementation. Respond with only the test source — no preamble, no markdown fences. Output ONLY vitest tests using describe, it, and expect. Import the function from ./generated-code. Do not write a custom test runner, do not use console.log, do not define a runTests function. For debounce timer tests: after the final debounced call, always advance fake timers by the full delay amount before asserting. For example, if delay is 100ms, the final vi.advanceTimersByTime() must be at least 100, not 50.",
+      stableContext: cleanCode,
+      variableTask: `Write tests for the following specification:\n\n${spec}`,
     };
-    state = reducer(state, { type: "FAILURE", failedStage: "code", error: msg });
-    return await terminate(sessionId, "FAIL", "code", failOutput);
-  });
-  state = reducer(state, { type: "CODE_READY", output: code });
+    const tests = await callClaude(testsConfig, "tests", 1);
+    await writeStage(sessionId, 3, "tests", tests);
+    const fixedTests = tests.content.replace(/from ['"]\.\/\w+['"]/g, 'from "./generated-code"');
+    const strippedTests = fixedTests.replace(/```(?:typescript|ts)?\n?/g, "").replace(/```/g, "").trim();
+    const lastDescribeEnd = strippedTests.lastIndexOf('});');
+    const cleanTests = lastDescribeEnd !== -1
+      ? strippedTests.slice(0, lastDescribeEnd + 3)
+      : strippedTests;
+    const vitestImport = `import { describe, it, expect, beforeEach, afterEach, beforeAll, afterAll, vi } from 'vitest';\n`;
+    const finalTests = cleanTests.includes("from 'vitest'") || cleanTests.includes('from "vitest"')
+      ? cleanTests
+      : vitestImport + cleanTests;
+    await writeFile("src/generated-tests.test.ts", finalTests, "utf8");
+    const writtenTests = await readFile("src/generated-tests.test.ts", "utf8");
+    const patchedTests = writtenTests
+      .replace(/\btest\(/g, "it(")
+      .replace(/from '@jest\/globals'/g, "from 'vitest'")
+      .replace(/from "@jest\/globals"/g, 'from "vitest"')
+      .replace(/\.toBe\((\d+\.\d+)\)/g, '.toBeCloseTo($1)')
+      .replace(/(import\s*\{[^}]*\}\s*from\s*['"]vitest['"];\n)(\s*import\s*\{[^}]*\}\s*from\s*['"]vitest['"];\n)+/g, '$1');
+    await writeFile("src/generated-tests.test.ts", patchedTests, "utf8");
+    if (tests.status !== "PASS") {
+      state = reducer(state, { type: "FAILURE", failedStage: "tests", error: tests.content });
+      await terminate(sessionId, tests.status, "tests", tests);
+    }
+    state = reducer(state, { type: "TESTS_READY", output: tests });
 
-  // Stage 3: Tests (GLM)
-  const testsConfig: PromptConfig = {
-    systemPrompt:
-      "You are the Testing stage of the ASSET pipeline. Write comprehensive tests for the provided implementation. Respond with only the test source — no preamble, no markdown fences. Output ONLY vitest tests using describe, it, and expect. Import the function from ./generated-code. Do not write a custom test runner, do not use console.log, do not define a runTests function. For debounce timer tests: after the final debounced call, always advance fake timers by the full delay amount before asserting. For example, if delay is 100ms, the final vi.advanceTimersByTime() must be at least 100, not 50.",
-    stableContext: cleanCode,
-    variableTask: `Write tests for the following specification:\n\n${spec}`,
-  };
-  const tests = await callClaude(testsConfig, "tests", 1);
-  await writeStage(sessionId, 3, "tests", tests);
-  const fixedTests = tests.content.replace(/from ['"]\.\/\w+['"]/g, 'from "./generated-code"');
-  const strippedTests = fixedTests.replace(/```(?:typescript|ts)?\n?/g, "").replace(/```/g, "").trim();
-  const lastDescribeEnd = strippedTests.lastIndexOf('});');
-  const cleanTests = lastDescribeEnd !== -1
-    ? strippedTests.slice(0, lastDescribeEnd + 3)
-    : strippedTests;
-  const vitestImport = `import { describe, it, expect, beforeEach, afterEach, beforeAll, afterAll, vi } from 'vitest';\n`;
-  const finalTests = cleanTests.includes("from 'vitest'") || cleanTests.includes('from "vitest"')
-    ? cleanTests
-    : vitestImport + cleanTests;
-  await writeFile("src/generated-tests.test.ts", finalTests, "utf8");
-  const writtenTests = await readFile("src/generated-tests.test.ts", "utf8");
-  const patchedTests = writtenTests
-    .replace(/\btest\(/g, "it(")
-    .replace(/from '@jest\/globals'/g, "from 'vitest'")
-    .replace(/from "@jest\/globals"/g, 'from "vitest"')
-    .replace(/\.toBe\((\d+\.\d+)\)/g, '.toBeCloseTo($1)')
-    .replace(/(import\s*\{[^}]*\}\s*from\s*['"]vitest['"];\n)(\s*import\s*\{[^}]*\}\s*from\s*['"]vitest['"];\n)+/g, '$1');
-  await writeFile("src/generated-tests.test.ts", patchedTests, "utf8");
-  if (tests.status !== "PASS") {
-    state = reducer(state, { type: "FAILURE", failedStage: "tests", error: tests.content });
-    await terminate(sessionId, tests.status, "tests", tests);
-  }
-  state = reducer(state, { type: "TESTS_READY", output: tests });
+    // Stage 4: Pre-audit (Nemotron) — systemPrompt overridden internally by mode
+    const preAuditConfig: PromptConfig = {
+      systemPrompt: "Only return ESCALATE if the code has a security vulnerability or is fundamentally broken. Return PASS for any working implementation, even if it lacks optional features. Do not invent requirements not stated in the spec.",
+      stableContext: `SPEC:\n${spec}\n\nCODE:\n${code.content}\n\nTESTS:\n${fixedTests}`,
+      variableTask: "Audit the code and tests against the specification above.",
+    };
+    const preAudit = await callNemotron(preAuditConfig, "pre", "audit-pre", 1);
+    await writeStage(sessionId, 4, "audit-pre", preAudit);
+    if (preAudit.status === "ESCALATE") {
+      state = reducer(state, { type: "FAILURE", failedStage: "audit-pre", error: preAudit.content });
+      await terminate(sessionId, "ESCALATE", "audit-pre", preAudit);
+    }
+    state = reducer(state, { type: "AUDIT_PRE_PASS", output: preAudit });
 
-  // Stage 4: Pre-audit (Nemotron) — systemPrompt overridden internally by mode
-  const preAuditConfig: PromptConfig = {
-    systemPrompt: "Only return ESCALATE if the code has a security vulnerability or is fundamentally broken. Return PASS for any working implementation, even if it lacks optional features. Do not invent requirements not stated in the spec.",
-    stableContext: `SPEC:\n${spec}\n\nCODE:\n${code.content}\n\nTESTS:\n${fixedTests}`,
-    variableTask: "Audit the code and tests against the specification above.",
-  };
-  const preAudit = await callNemotron(preAuditConfig, "pre", "audit-pre", 1);
-  await writeStage(sessionId, 4, "audit-pre", preAudit);
-  if (preAudit.status === "ESCALATE") {
-    state = reducer(state, { type: "FAILURE", failedStage: "audit-pre", error: preAudit.content });
-    await terminate(sessionId, "ESCALATE", "audit-pre", preAudit);
-  }
-  state = reducer(state, { type: "AUDIT_PRE_PASS", output: preAudit });
+    // Stage 5: VM execution (OrbStack)
+    vmOutput = await runTestsInVM();
+    await writeStage(sessionId, 5, "execution", vmOutput);
 
-  // Stage 5: VM execution (OrbStack)
-  const vmOutput = await runTestsInVM();
-  await writeStage(sessionId, 5, "execution", vmOutput);
-  if (vmOutput.status !== "PASS") {
-    state = reducer(state, { type: "FAILURE", failedStage: "execution", error: vmOutput.content });
-    await terminate(sessionId, vmOutput.status, "execution", vmOutput);
+    if (vmOutput.status === "PASS") {
+      state = reducer(state, { type: "EXECUTION_COMPLETE", output: vmOutput });
+      break;
+    }
+
+    testRetryCount++;
+    if (testRetryCount >= MAX_RETRIES_TEST_FAILURE) {
+      state = reducer(state, { type: "FAILURE", failedStage: "execution", error: vmOutput.content });
+      await terminate(sessionId, vmOutput.status, "execution", vmOutput);
+    }
+
+    const testFeedback = parseVitestDiagnostics(vmOutput.content);
+    state = reducer(state, { type: "TEST_FEEDBACK", output: vmOutput, feedback: testFeedback });
+    priorCleanCode = cleanCode;
+    latestTestFeedback = testFeedback;
   }
-  state = reducer(state, { type: "EXECUTION_COMPLETE", output: vmOutput });
 
   // Stage 6: Post-audit (Nemotron) — systemPrompt overridden internally by mode
   const postAuditConfig: PromptConfig = {

@@ -25,5 +25,7 @@ Implement the core ASSET pipeline, including AI model wrappers with caching, ses
 - Pipeline execution is governed by an explicit state machine with valid transition handling.
 - Compilation and testing errors are fed back into the generation loop for corrective retries.
 - Every pipeline execution produces telemetry for cost and performance monitoring.
+- Repo-specific context is bootstrapped once and cached via content hashing to minimize ingestion latency.
+- Cached prefixes are refreshed only when stable context (README, architecture, etc.) changes or TTL expires.
 - Cached end-to-end execution completes within the 5-minute performance envelope.
 

@@ -240,6 +240,138 @@ Handoff: Initial Pipeline Implementation - Phase 4
 
    - Confirmation: No behavioral change to the running pipeline — only the state
        tracking layer was added. The reducer is pure and side-effect free.
+Handoff: Initial Pipeline Implementation - Phase 4 (Feedback-Threaded Retry Logic - Phase 2)
+
+  Current Task
+   - ID: v2-feedback-threaded-retry-vitest
+   - Title: Implement Feedback-Threaded Retry for `vitest` Errors
+
+  Approved Inputs
+   - Specification: spec.md (./conductor/tracks/initial-implementation/spec.md)
+   - Plan Phase: plan.md (./conductor/tracks/initial-implementation/plan.md)
+
+  Files Read for Context
+   - src/types.ts
+   - src/pipeline.ts
+
+  Files Allowed to Change
+   - src/types.ts
+   - src/pipeline.ts
+
+  Files Explicitly Off-Limits
+   - package.json
+   - tsconfig.json
+   - conductor/**
+   - src/wrappers/**
+   - src/memory.ts
+   - src/cache/**
+
+  Constraints
+   - Update `src/types.ts`:
+     - Add `TEST_FEEDBACK` to `PipelineEvent`.
+     - Update `PipelineState` (`coding` variant) to include `latestTestFeedback?: string`.
+   - Implement `parseVitestDiagnostics(vitestOutput: string): string` in `src/pipeline.ts`.
+     - *Requirement:* Extract failing test names and their associated error messages/stack traces.
+     - *Constraint:* Filter out verbose Vitest noise, keeping only high-signal failure data.
+   - Refactor `runPipeline` in `src/pipeline.ts` to support looping back to Stage 2 (Code) if Stage 5 (Execution) fails.
+     - *Constraint:* Use a `while` loop or recursion to manage the multi-stage retry.
+     - *Constraint:* Total retries for the entire pipeline (test failures) should be capped by a new constant `MAX_RETRIES_TEST_FAILURE = 3`.
+     - *Requirement:* Regenerated code MUST trigger a re-run of Stage 3 (Tests), Stage 4 (Pre-audit), Stage 5 (Execution), and Stage 6 (Post-audit).
+   - Update `buildCodeRetryTask` in `src/pipeline.ts`:
+     - It should now accept both `tsc` feedback and `vitest` feedback.
+     - If both are present (unlikely but possible), prioritize or combine them cleanly.
+   - Update the `reducer` in `src/pipeline.ts` to handle the `TEST_FEEDBACK` event, updating the `coding` state.
+
+  Validation Required
+   - `npx tsc --noEmit`: Must pass after changes.
+   - Manual/Simulated Verification:
+     - Verify that a Vitest failure triggers a jump back to Stage 2.
+     - Verify that Claude receives the parsed Vitest diagnostics in the retry prompt.
+     - Verify that Stage 3 and 4 are re-executed after a retry.
+     - Verify that the pipeline eventually fails if the tests never pass after 3 retries.
+
+  Status
+   - Task State: REVIEW_REQUIRED
+   - Assigned To: Claude Code
+
+  Execution Progress
+   - Implementation Notes: |
+       Implemented all Phase 2 components.
+
+       src/types.ts:
+         - Added `latestTestFeedback?: string` to the `coding` PipelineState variant.
+         - Added `TEST_FEEDBACK` event to PipelineEvent carrying `output: StageOutput`
+           and `feedback: string` (mirrors the TYPE_CHECK_FEEDBACK shape).
+
+       src/pipeline.ts:
+         - Added `MAX_RETRIES_TEST_FAILURE = 3` constant.
+         - `parseVitestDiagnostics(vitestOutput)`: scans output for FAIL/failed-test
+           block markers, strips vitest-internal node_modules stack frames, trims
+           trailing blank lines, and caps at 3000 chars. Falls back to the first
+           3000 chars of raw output if nothing is captured.
+         - `buildCodeRetryTask` signature updated to
+           `(spec, currentCode, tscFeedback?, testFeedback?)`. Combines whichever
+           feedback types are present; includes both sections when both are non-empty.
+           Existing tsc-only call sites updated to pass `latestTscFeedback || undefined`.
+         - `refineCodeUntilTypeSafe` gained two optional parameters: `priorCode?`
+           (the code that passed tsc but failed vitest) and `priorTestFeedback?`
+           (parsed vitest diagnostics from the outer loop). On attempt 0 with test
+           feedback, the initial prompt is rebuilt via `buildCodeRetryTask` with the
+           prior code and test feedback. `pendingTestFeedback` is cleared after the
+           first use so subsequent tsc-retry iterations don't keep injecting stale
+           test feedback.
+         - `reducer`: added `TEST_FEEDBACK` case — guards on `executing` status,
+           transitions to `coding` with `latestTestFeedback` set; resets
+           `attempt`/`latestFeedback`/`typeCheckOutput` (fresh coding state for
+           the new attempt).
+         - `runPipeline`: Stages 2-5 are now wrapped in a `while (true)` outer
+           loop. On vitest PASS the loop breaks and Stage 6 runs. On vitest FAIL:
+           `testRetryCount` is incremented; if >= `MAX_RETRIES_TEST_FAILURE` the
+           pipeline terminates; otherwise `TEST_FEEDBACK` is dispatched, `priorCleanCode`
+           and `latestTestFeedback` are updated, and the loop repeats from Stage 2.
+           Stages 0 (Research) and 1 (Plan) remain outside the loop and run once.
+           `vmOutput` is declared with `!` (definite assignment) before the loop
+           and referenced in Stage 6 after the break.
+
+   - Blockers: None
+
+  Handoff Back to Gemini
+   - Files Changed:
+       1. src/types.ts — added `latestTestFeedback?: string` to coding state;
+          added `TEST_FEEDBACK` event to PipelineEvent.
+       2. src/pipeline.ts — added `MAX_RETRIES_TEST_FAILURE`; added
+          `parseVitestDiagnostics`; updated `buildCodeRetryTask` signature;
+          updated `refineCodeUntilTypeSafe` with priorCode/priorTestFeedback params;
+          added `TEST_FEEDBACK` reducer case; refactored `runPipeline` with outer
+          while-loop for vitest retry.
+
+   - Verification Results:
+       npx tsc --noEmit: passed with no errors after all changes.
+
+       Vitest failure triggers Stage 2 retry: On vmOutput.status !== "PASS",
+         parseVitestDiagnostics extracts diagnostics, TEST_FEEDBACK is dispatched
+         (state transitions executing → coding), priorCleanCode/latestTestFeedback
+         are updated, and the loop restarts at Stage 2. Verified by code-path
+         inspection.
+
+       Claude receives parsed diagnostics: On the next Stage 2 iteration,
+         refineCodeUntilTypeSafe calls buildCodeRetryTask with the prior code and
+         test feedback, producing a prompt that includes both the current code and
+         the vitest failure block. Verified by code-path inspection.
+
+       Stages 3 and 4 re-executed after retry: The while loop body contains the
+         complete Stage 2-5 sequence; each iteration unconditionally runs tests
+         (Stage 3) and pre-audit (Stage 4) before Stage 5. Verified by structure.
+
+       Pipeline fails after 3 test retries: testRetryCount increments on each
+         vitest failure; when >= MAX_RETRIES_TEST_FAILURE (3), FAILURE is dispatched
+         and terminate() is called. Verified by code-path inspection.
+
+   - Confirmation: Stages 0 and 1 are unaffected. The tsc inner retry loop
+       (refineCodeUntilTypeSafe) is fully compatible with the outer vitest loop.
+       The reducer handles all existing events unchanged. No new state leakage
+       between outer iterations.
+
 Handoff: Initial Pipeline Implementation - Phase 4 (Feedback-Threaded Retry Logic - Phase 1)
 
   Current Task
