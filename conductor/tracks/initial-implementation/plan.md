@@ -1,13 +1,14 @@
 # Implementation Plan: Initial Pipeline Implementation
 
 ## Current Status
-- **DONE:** Core Wrappers (Claude, Gemini, Perplexity, GLM, Nemotron) with caching.
-- **DONE:** Memory & Persistence (Session/Canonical state infrastructure).
-- **DONE:** Orchestration & CLI (Initial pipeline and CLI entry point).
-- **DONE:** State Machine Refactor (Type-safe state transitions).
-- **DONE:** Feedback-Threaded Retry Logic (Phase 1: `tsc` compilation errors).
-- **DONE:** Feedback-Threaded Retry Logic (Phase 2: `vitest` execution errors).
-- **DONE:** Doppler Secrets Integration (Core implementation and preflight checks).
+- DONE: Core Wrappers (Claude, Gemini, Perplexity, GLM, Nemotron) with caching.
+- DONE: Memory & Persistence (Session/Canonical state infrastructure).
+- DONE: Orchestration & CLI (Initial pipeline and CLI entry point).
+- DONE: State Machine Refactor (Type-safe state transitions).
+- DONE: Feedback-Threaded Retry Logic (Phase 1: `tsc` compilation errors).
+- DONE: Feedback-Threaded Retry Logic (Phase 2: `vitest` execution errors).
+- PARTIAL: Doppler Secrets Integration — core preflight checks implemented; user/CI Doppler CLI setup pending.
+- IN-PROGRESS: Repo-context bootstrap & invalidation implemented in src/ — local tests pass; live invalidation verification pending.
 
 ---
 
@@ -39,12 +40,16 @@
     - [x] Core code implementation (Preflight checks and `assertEnv` at orchestration boundary).
     - [ ] User/CI setup for Doppler CLI (Environment/Injection configuration).
 - [ ] **Repo Context Bootstrap + Repo-Scoped Invalidation**
-    - [x] Implement repo-scoped canonical state and cache metadata initialization. (Implemented; verification pending)
+    - [x] Implement repo-scoped canonical state and cache metadata initialization. (Implemented — verification pending)
         - *Requirement:* All cache namespaces and canonical paths must be scoped by repo identity.
     - [x] Create `src/scripts/bootstrap.ts` for first-time project link/setup. (Implemented)
     - [x] Implement stable context ingestion (README, architecture, schema, etc.) using content hashing. (Implemented)
     - [x] Build hashing logic for change detection (stable context vs. cached metadata) to trigger refresh. (Implemented)
-    - Note: Local verification (tsc & vitest) recorded; live-run invalidation behavior still pending verification.
+    - Verification steps:
+      1. Run: npx tsc --noEmit && npx vitest run (smoke verified locally).
+      2. Mutate docs/architecture.md (minor edit) and re-run full pipeline (CI/sandbox): expect context-manifest mismatch → cache invalidation log and successful manifest update.
+      3. Simulate deleteStaleCaches failure (network block or stub) and re-run: pipeline must raise fatal error; capture logs.
+    - Note: Mark these items DONE only after CI/sandbox logs attached to handoff.md.
 - [ ] **Sandbox Hardening**
     - [ ] Enhance OrbStack/Ubuntu VM isolation.
         - *Requirement:* Restricted repo mounts (Read-only for host repo → VM `/workspace`).
