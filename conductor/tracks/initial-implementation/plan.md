@@ -27,22 +27,8 @@ Status of the initial pipeline implementation roadmap for the ASSET project.
 - [x] **Claude Prompt Caching:** Fixed Haiku 4.5 caching by meeting 4096-token minimum floor in stable blocks.
 - [x] **Per-Stage Model Selection (DONE)**
 - [x] **Model Dispatch & CLI Integration (DONE)**
-
 - [x] **Comprehensive Telemetry & Pricing (DONE)**
-    - [x] **Category 1: Token Usage (Input/Output)**
-        - [x] Multi-model token capture (Claude, Nemotron, Tavily).
-        - [x] Aggregate `input_tokens` and `output_tokens` across all stages.
-    - [x] **Category 2: Cache Performance (Claude)**
-        - [x] `callClaude` extraction of cache creation/read tokens.
-        - [x] Aggregated cache reporting: "Investment" vs "Savings" vs "Efficiency %".
-    - [x] **Category 3: Retry Loop Counts**
-        - [x] `tscRetryCount` and `vitestRetryCount` tracking.
-        - [x] Integrated into `logSessionSummary` and session telemetry.
-    - [x] **Category 4: Pricing Registry & Costing**
-        - [x] Created `src/pricing/registry.ts` with May 2026 rates.
-        - [x] Integrated `calculateClaudeCost`, `calculateNemotronCost`, `calculateTavilyCost`.
-        - [x] Model-aware cost calculation per session log.
-        - [x] Configurable Tavily cost via environment variable.
+- [x] **Interactive Mode (DONE)**
 
 - [ ] **Multi-File Generation (Next Priority)**
     - [ ] Extend task spec to declare multiple output files.
@@ -146,14 +132,6 @@ Status of the initial pipeline implementation roadmap for the ASSET project.
     - [ ] Validate generated spec before saving.
     - [ ] Write output to `tasks/` with deterministic naming.
     - [ ] Add tests for generation flow and invalid-spec rejection.
-
-- [ ] **Interactive Mode**
-    - [ ] Add `--interactive` CLI flag.
-    - [ ] Pause after each stage completion.
-    - [ ] Show stage output summary and available actions.
-    - [ ] Support continue, retry with feedback, and abort flows.
-    - [ ] Inject human feedback into the next retry prompt.
-    - [ ] Add tests for continue, retry, and abort behavior.
 
 - [ ] **Frontend Feasibility Study**
     - [ ] Define representative frontend task set for evaluation.

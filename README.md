@@ -69,6 +69,18 @@ npm run asset "Write a TypeScript function that debounces a callback by N millis
 npm run asset tasks/debounce.json
 ```
 
+### Interactive Mode
+
+Interactive mode enables human oversight and feedback during pipeline execution. After each major pipeline stage completes, the pipeline pauses and prompts for action.
+
+```bash
+asset <spec> --interactive
+```
+
+- **[C]ontinue**: Move to the next stage without changes.
+- **[R]etry with feedback**: Provide feedback to be injected into the next stage's execution.
+- **[A]bort**: Exit the pipeline gracefully.
+
 ## Integrating ASSET into your repository
 
 To add ASSET to an existing project:

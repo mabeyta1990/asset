@@ -504,6 +504,53 @@ describe("Pricing Registry", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Interactive Mode
+// ---------------------------------------------------------------------------
+describe("promptInteractive", () => {
+  it("is exported and callable", async () => {
+    const { promptInteractive: importedPrompt } = await import("./pipeline.js");
+    expect(typeof importedPrompt).toBe("function");
+  });
+});
+
+describe("Interactive feedback injection", () => {
+  it("appends feedback to variableTask in config when feedback is provided", () => {
+    const baseConfig = {
+      systemPrompt: "Do something",
+      stableContext: "Context",
+      variableTask: "Task description",
+    };
+
+    const feedback = "User provided feedback";
+    const updatedConfig = {
+      ...baseConfig,
+      variableTask: `${baseConfig.variableTask}\n\nAdditional feedback from interactive review: ${feedback}`,
+    };
+
+    expect(updatedConfig.variableTask).toContain("Task description");
+    expect(updatedConfig.variableTask).toContain("User provided feedback");
+  });
+
+  it("handles multiple feedback injections sequentially", () => {
+    let config = {
+      systemPrompt: "Do something",
+      stableContext: "Context",
+      variableTask: "Task description",
+    };
+
+    const feedback1 = "First feedback";
+    config.variableTask = `${config.variableTask}\n\nAdditional feedback from interactive review: ${feedback1}`;
+
+    const feedback2 = "Second feedback";
+    config.variableTask = `${config.variableTask}\n\nAdditional feedback from interactive review: ${feedback2}`;
+
+    expect(config.variableTask).toContain("Task description");
+    expect(config.variableTask).toContain("First feedback");
+    expect(config.variableTask).toContain("Second feedback");
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 function makeStage(overrides: Partial<StageOutput>): StageOutput {

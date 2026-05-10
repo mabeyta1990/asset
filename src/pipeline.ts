@@ -1,7 +1,8 @@
 import { execFile } from "node:child_process";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { createInterface } from "node:readline";
 import { join, dirname, basename } from "node:path";
-import type { ClaudeUsage, NemotronUsage, ModelUsage, PromptConfig, StageName, StageOutput, StageVerdict, PipelineState, PipelineEvent, TaskSpec, TaskStageKey, ModelProvider } from "./types.js";
+import type { ClaudeUsage, NemotronUsage, ModelUsage, PromptConfig, StageName, StageOutput, StageVerdict, PipelineState, PipelineEvent, TaskSpec, TaskStageKey, ModelProvider, InteractiveAction } from "./types.js";
 import { configureMemory, initSession, writeStage, finalizeSession } from "./memory.js";
 import { configureRefresh, getStagingDir, promoteStagedFiles, refreshCanonicalState, deleteStaleCaches } from "./cache/refresh.js";
 import { configureCanonical, readCanonicalState } from "./cache/canonical.js";
@@ -62,6 +63,96 @@ function assertEnv(): void {
       "Check your Doppler project setup or .env file.",
     );
   }
+}
+
+function formatTelemetry(stageName: string, output: StageOutput, modelSelection: Record<TaskStageKey, string>): string {
+  const parts: string[] = [];
+  const usage = output.usage ?? {};
+
+  // Duration
+  if (output.telemetry?.durationMs) {
+    parts.push(`duration=${output.telemetry.durationMs}ms`);
+  }
+
+  // Claude tokens and cache
+  if (isClaudeUsage(usage)) {
+    if (usage.input_tokens > 0 || usage.output_tokens > 0) {
+      parts.push(`claude_tokens(in=${usage.input_tokens} out=${usage.output_tokens})`);
+    }
+    if (usage.cache_creation_input_tokens > 0 || usage.cache_read_input_tokens > 0) {
+      parts.push(`cache(write=${usage.cache_creation_input_tokens} read=${usage.cache_read_input_tokens})`);
+    }
+    // Calculate cost for Claude
+    const model = modelSelection.code;
+    const cost = calculateClaudeCost(model, {
+      input: usage.input_tokens,
+      output: usage.output_tokens,
+      cacheWrite: usage.cache_creation_input_tokens,
+      cacheHit: usage.cache_read_input_tokens,
+    });
+    if (cost > 0) {
+      parts.push(`cost=$${cost.toFixed(6)}`);
+    }
+  }
+
+  // Nemotron tokens
+  if (isNemotronUsage(usage)) {
+    if (usage.prompt_tokens > 0 || usage.completion_tokens > 0) {
+      parts.push(`nemotron_tokens(in=${usage.prompt_tokens} out=${usage.completion_tokens})`);
+    }
+    const cost = calculateNemotronCost(usage.prompt_tokens, usage.completion_tokens);
+    if (cost > 0) {
+      parts.push(`cost=$${cost.toFixed(6)}`);
+    }
+  }
+
+  // Tavily requests
+  if (typeof usage === "object" && usage !== null && "results" in usage) {
+    const results = typeof usage.results === "number" ? usage.results : 0;
+    if (results > 0) {
+      parts.push(`tavily_requests=${results}`);
+    }
+    const cost = calculateTavilyCost(results);
+    if (cost > 0) {
+      parts.push(`cost=$${cost.toFixed(6)}`);
+    }
+  }
+
+  return parts.length > 0 ? `\n[Telemetry] ${parts.join(" | ")}` : "";
+}
+
+export async function promptInteractive(stageName: string, output: StageOutput, modelSelection?: Record<TaskStageKey, string>): Promise<{ action: InteractiveAction; feedback?: string }> {
+  const rl = createInterface({
+    input: process.stdin,
+    output: process.stdout,
+  });
+
+  console.log(`\n[$${stageName}] Stage completed with status: ${output.status}`);
+
+  if (modelSelection) {
+    const telemetry = formatTelemetry(stageName, output, modelSelection);
+    if (telemetry) {
+      console.log(telemetry);
+    }
+  }
+
+  console.log(`Output summary (first 500 chars):\n${output.content.slice(0, 500)}\n`);
+
+  return new Promise((resolve) => {
+    rl.question("[C]ontinue, [R]etry with feedback, [A]bort? ", (answer) => {
+      const action = answer.toLowerCase().trim();
+      if (action === "r") {
+        rl.question("Provide feedback for the next stage: ", (feedback) => {
+          rl.close();
+          resolve({ action: "retry", feedback });
+        });
+      } else {
+        rl.close();
+        if (action === "a") resolve({ action: "abort" });
+        else resolve({ action: "continue" });
+      }
+    });
+  });
 }
 
 export async function withTiming<T extends StageOutput>(fn: () => Promise<T>): Promise<T> {
@@ -431,9 +522,10 @@ async function terminate(
   return process.exit(verdict === "ESCALATE" ? 2 : 1);
 }
 
-export async function runPipeline(taskOrSpec: string | TaskSpec): Promise<void> {
+export async function runPipeline(taskOrSpec: string | TaskSpec, options?: { interactive?: boolean }): Promise<void> {
   assertEnv();
   const pipelineStart = performance.now();
+  const interactiveMode = options?.interactive ?? false;
 
   const task: TaskSpec = typeof taskOrSpec === "string"
     ? { id: "", title: "", description: "", models: {} }
@@ -460,6 +552,7 @@ export async function runPipeline(taskOrSpec: string | TaskSpec): Promise<void> 
   await mkdir(stagingDir, { recursive: true });
 
   let state: PipelineState = reducer({ status: "idle" }, { type: "START", spec });
+  let researchFeedback: string | undefined;
 
   // Stage 0: Research (Tavily)
   const research = await withTiming(() => callResearch(
@@ -474,9 +567,24 @@ export async function runPipeline(taskOrSpec: string | TaskSpec): Promise<void> 
   }
   state = reducer(state, { type: "RESEARCH_COMPLETE", output: research });
 
+  if (interactiveMode) {
+    const result = await promptInteractive("research", research, modelSelection);
+    if (result.action === "abort") {
+      await finalizeSession(sessionId, { verdict: "FAIL", summary: "Aborted by user during research stage" });
+      process.exit(0);
+    }
+    if (result.action === "retry") {
+      researchFeedback = result.feedback;
+    }
+  }
+
   // Stage 1: Plan (Llama-3.3-Nemotron-Super-49B-v1.5)
-  const planConfig = buildPlanConfig(research.content, spec);
-  const plan = await withTiming(() => callNemotronPlan(planConfig, 1, modelSelection.plan));
+  let planFeedback: string | undefined;
+  let planConfigInput = buildPlanConfig(research.content, spec);
+  if (researchFeedback) {
+    planConfigInput.variableTask = `${planConfigInput.variableTask}\n\nAdditional feedback from the research stage: ${researchFeedback}`;
+  }
+  const plan = await withTiming(() => callNemotronPlan(planConfigInput, 1, modelSelection.plan));
   await writeStage(sessionId, 1, "plan", plan);
   if (plan.status !== "PASS") {
     state = reducer(state, { type: "FAILURE", failedStage: "plan", error: plan.content });
@@ -484,20 +592,42 @@ export async function runPipeline(taskOrSpec: string | TaskSpec): Promise<void> 
   }
   state = reducer(state, { type: "PLAN_READY", output: plan });
 
+  if (interactiveMode) {
+    const result = await promptInteractive("plan", plan, modelSelection);
+    if (result.action === "abort") {
+      await finalizeSession(sessionId, { verdict: "FAIL", summary: "Aborted by user during plan stage" });
+      process.exit(0);
+    }
+    if (result.action === "retry") {
+      planFeedback = result.feedback;
+    }
+  }
+
   // Base code config (reused across vitest retries)
-  const codeConfig = buildCodeConfig(plan.content, spec);
+  let codeConfig = buildCodeConfig(plan.content, spec);
+  if (planFeedback) {
+    codeConfig.variableTask = `${codeConfig.variableTask}\n\nAdditional feedback from the plan stage: ${planFeedback}`;
+  }
 
   // Outer retry loop: Stages 2-5 repeat on vitest failure
   let vitestRetryCount = 0;
   let tscRetryCount = 0;
   let priorCleanCode: string | undefined;
   let latestTestFeedback: string | undefined;
+  let interactiveCodeFeedback: string | undefined;
   let vmOutput!: StageOutput;
 
   while (true) {
     // Stage 2: Code (Claude Opus 4.7 with tsc feedback-threaded retry)
+    let codeConfigWithInteractiveFeedback = codeConfig;
+    if (interactiveCodeFeedback) {
+      codeConfigWithInteractiveFeedback = {
+        ...codeConfig,
+        variableTask: `${codeConfig.variableTask}\n\nAdditional feedback from interactive review: ${interactiveCodeFeedback}`,
+      };
+    }
     const { codeOutput: code, cleanCode, tscRetryCount: stageTscRetryCount } = await refineCodeUntilTypeSafe(
-      codeConfig,
+      codeConfigWithInteractiveFeedback,
       spec,
       sessionId,
       stagingDir,
@@ -520,8 +650,25 @@ export async function runPipeline(taskOrSpec: string | TaskSpec): Promise<void> 
     tscRetryCount = stageTscRetryCount;
     state = reducer(state, { type: "CODE_READY", output: code });
 
+    if (interactiveMode && !interactiveCodeFeedback) {
+      const result = await promptInteractive("code", code, modelSelection);
+      if (result.action === "abort") {
+        await finalizeSession(sessionId, { verdict: "FAIL", summary: "Aborted by user during code stage" });
+        process.exit(0);
+      }
+      if (result.action === "retry") {
+        interactiveCodeFeedback = result.feedback;
+        priorCleanCode = cleanCode;
+        latestTestFeedback = undefined;
+        continue;
+      }
+    }
+
     // Stage 3: Tests (GLM)
-    const testsConfig = buildTestsConfig(cleanCode, spec);
+    let testsConfig = buildTestsConfig(cleanCode, spec);
+    if (interactiveCodeFeedback) {
+      testsConfig.variableTask = `${testsConfig.variableTask}\n\nAdditional feedback from interactive review: ${interactiveCodeFeedback}`;
+    }
     const tests = await withTiming(() => callClaude(testsConfig, "tests", 1, modelSelection.code));
     await writeStage(sessionId, 3, "tests", tests);
     const fixedTests = tests.content.replace(/from ['"]\.\/\w+['"]/g, 'from "./generated-code"');
@@ -550,8 +697,25 @@ export async function runPipeline(taskOrSpec: string | TaskSpec): Promise<void> 
     }
     state = reducer(state, { type: "TESTS_READY", output: tests });
 
+    if (interactiveMode) {
+      const result = await promptInteractive("tests", tests, modelSelection);
+      if (result.action === "abort") {
+        await finalizeSession(sessionId, { verdict: "FAIL", summary: "Aborted by user during tests stage" });
+        process.exit(0);
+      }
+      if (result.action === "retry") {
+        latestTestFeedback = result.feedback;
+        priorCleanCode = cleanCode;
+        interactiveCodeFeedback = undefined;
+        continue;
+      }
+    }
+
     // Stage 4: Pre-audit (Nemotron) — systemPrompt overridden internally by mode
-    const preAuditConfig = buildAuditPreConfig(spec, code.content, fixedTests);
+    let preAuditConfig = buildAuditPreConfig(spec, code.content, fixedTests);
+    if (interactiveCodeFeedback) {
+      preAuditConfig.variableTask = `${preAuditConfig.variableTask}\n\nAdditional feedback from interactive review: ${interactiveCodeFeedback}`;
+    }
     const preAudit = await withTiming(() => callNemotron(preAuditConfig, "pre", "audit-pre", 1, modelSelection.audit));
     await writeStage(sessionId, 4, "audit-pre", preAudit);
     if (preAudit.status === "ESCALATE") {
@@ -560,12 +724,41 @@ export async function runPipeline(taskOrSpec: string | TaskSpec): Promise<void> 
     }
     state = reducer(state, { type: "AUDIT_PRE_PASS", output: preAudit });
 
+    if (interactiveMode) {
+      const result = await promptInteractive("audit-pre", preAudit, modelSelection);
+      if (result.action === "abort") {
+        await finalizeSession(sessionId, { verdict: "FAIL", summary: "Aborted by user during pre-audit stage" });
+        process.exit(0);
+      }
+      if (result.action === "retry") {
+        interactiveCodeFeedback = result.feedback;
+        priorCleanCode = cleanCode;
+        latestTestFeedback = undefined;
+        continue;
+      }
+    }
+
     // Stage 5: VM execution (OrbStack)
     vmOutput = await withTiming(() => runTestsInVM(stagedTestPath));
     await writeStage(sessionId, 5, "execution", vmOutput);
 
     if (vmOutput.status === "PASS") {
       state = reducer(state, { type: "EXECUTION_COMPLETE", output: vmOutput });
+
+      if (interactiveMode) {
+        const result = await promptInteractive("execution", vmOutput, modelSelection);
+        if (result.action === "abort") {
+          await finalizeSession(sessionId, { verdict: "FAIL", summary: "Aborted by user during execution stage" });
+          process.exit(0);
+        }
+        if (result.action === "retry") {
+          interactiveCodeFeedback = result.feedback;
+          priorCleanCode = cleanCode;
+          latestTestFeedback = undefined;
+          continue;
+        }
+      }
+
       break;
     }
 
@@ -579,15 +772,35 @@ export async function runPipeline(taskOrSpec: string | TaskSpec): Promise<void> 
     state = reducer(state, { type: "TEST_FEEDBACK", output: vmOutput, feedback: testFeedback });
     priorCleanCode = cleanCode;
     latestTestFeedback = testFeedback;
+    interactiveCodeFeedback = undefined;
   }
 
   // Stage 6: Post-audit (Nemotron) — systemPrompt overridden internally by mode
-  const postAuditConfig = buildAuditPostConfig(spec, vmOutput.content);
-  const postAudit = await withTiming(() => callNemotron(postAuditConfig, "post", "audit-post", 1, modelSelection.audit));
+  let postAuditConfig = buildAuditPostConfig(spec, vmOutput.content);
+  let postAudit = await withTiming(() => callNemotron(postAuditConfig, "post", "audit-post", 1, modelSelection.audit));
   await writeStage(sessionId, 6, "audit-post", postAudit);
 
   if (postAudit.status === "PASS") {
     state = reducer(state, { type: "AUDIT_POST_PASS", output: postAudit });
+
+    if (interactiveMode) {
+      const result = await promptInteractive("audit-post", postAudit, modelSelection);
+      if (result.action === "abort") {
+        await finalizeSession(sessionId, { verdict: "FAIL", summary: "Aborted by user during post-audit stage" });
+        process.exit(0);
+      }
+      if (result.action === "retry") {
+        postAuditConfig.variableTask = `${postAuditConfig.variableTask}\n\nAdditional feedback from interactive review: ${result.feedback}`;
+        postAudit = await withTiming(() => callNemotron(postAuditConfig, "post", "audit-post", 2, modelSelection.audit));
+        await writeStage(sessionId, 6, "audit-post", postAudit);
+        if (postAudit.status !== "PASS") {
+          state = reducer(state, { type: "AUDIT_POST_FAIL", output: postAudit });
+          await terminate(sessionId, postAudit.status, "audit-post", postAudit);
+        }
+        state = reducer(state, { type: "AUDIT_POST_PASS", output: postAudit });
+      }
+    }
+
     const allStages = Object.values(collectOutputs(state)).filter((s): s is StageOutput => s !== undefined);
     logSessionSummary(sessionId, pipelineStart, allStages, modelSelection, tscRetryCount, vitestRetryCount);
     await promoteStagedFiles(sessionId);

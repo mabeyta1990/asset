@@ -7,6 +7,7 @@ import type { TaskSpec, TaskStageKey } from "../types.js";
 interface CliArgs {
   command?: string;
   input?: string;
+  interactive: boolean;
   modelOverrides: Partial<Record<TaskStageKey, string>>;
 }
 
@@ -14,7 +15,7 @@ function parseArgs(): CliArgs {
   const args = process.argv.slice(2);
 
   if (args.length === 0) {
-    console.error("Usage: asset <spec> [--model-code MODEL] [--model-plan MODEL] [--model-research MODEL] [--model-audit MODEL]");
+    console.error("Usage: asset <spec> [--interactive] [--model-code MODEL] [--model-plan MODEL] [--model-research MODEL] [--model-audit MODEL]");
     console.error("       asset cost --summary");
     process.exit(1);
   }
@@ -23,16 +24,19 @@ function parseArgs(): CliArgs {
 
   // Check for cost subcommand
   if (firstArg === "cost" && args[1] === "--summary") {
-    return { command: "cost", modelOverrides: {} };
+    return { command: "cost", interactive: false, modelOverrides: {} };
   }
 
   const input = firstArg;
   const modelOverrides: Partial<Record<TaskStageKey, string>> = {};
+  let interactive = false;
 
   // Parse optional model override flags
   for (let i = 1; i < args.length; i++) {
     const arg = args[i];
-    if (arg === "--model-code" && i + 1 < args.length) {
+    if (arg === "--interactive") {
+      interactive = true;
+    } else if (arg === "--model-code" && i + 1 < args.length) {
       modelOverrides.code = args[++i];
     } else if (arg === "--model-plan" && i + 1 < args.length) {
       modelOverrides.plan = args[++i];
@@ -46,11 +50,11 @@ function parseArgs(): CliArgs {
     }
   }
 
-  return { input, modelOverrides };
+  return { input, interactive, modelOverrides };
 }
 
 async function main(): Promise<void> {
-  const { command, input, modelOverrides } = parseArgs();
+  const { command, input, interactive, modelOverrides } = parseArgs();
 
   // Handle cost subcommand
   if (command === "cost") {
@@ -68,7 +72,7 @@ async function main(): Promise<void> {
   }
 
   if (!input) {
-    console.error("Usage: asset <spec> [--model-code MODEL] [--model-plan MODEL] [--model-research MODEL] [--model-audit MODEL]");
+    console.error("Usage: asset <spec> [--interactive] [--model-code MODEL] [--model-plan MODEL] [--model-research MODEL] [--model-audit MODEL]");
     console.error("       asset cost --summary");
     process.exit(1);
   }
@@ -98,7 +102,7 @@ async function main(): Promise<void> {
   }
 
   try {
-    await runPipeline(taskOrSpec);
+    await runPipeline(taskOrSpec, { interactive });
     console.log("[PASS] Pipeline completed successfully");
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);

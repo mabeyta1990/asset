@@ -100,6 +100,8 @@ export type PipelineState =
   | { status: "completed"; stages: Partial<Record<StageName, StageOutput>>; finalVerdict: StageVerdict }
   | { status: "failed"; failedStage: StageName; error: string; priorOutputs: Partial<Record<StageName, StageOutput>> };
 
+export type InteractiveAction = "continue" | "retry" | "abort";
+
 export type PipelineEvent =
   | { type: "START"; spec: string }
   | { type: "RESEARCH_COMPLETE"; output: StageOutput }
