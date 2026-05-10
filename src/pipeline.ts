@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { join } from "node:path";
-import type { PromptConfig, StageName, StageOutput, StageVerdict, PipelineState, PipelineEvent } from "./types.js";
+import { join, dirname, basename } from "node:path";
+import type { ClaudeUsage, PromptConfig, StageName, StageOutput, StageVerdict, PipelineState, PipelineEvent } from "./types.js";
 import { configureMemory, initSession, writeStage, finalizeSession } from "./memory.js";
 import { configureRefresh, getStagingDir, promoteStagedFiles, refreshCanonicalState, deleteStaleCaches } from "./cache/refresh.js";
 import { configureCanonical, readCanonicalState } from "./cache/canonical.js";
@@ -31,6 +31,38 @@ function assertEnv(): void {
       "Check your Doppler project setup or .env file.",
     );
   }
+}
+
+export async function withTiming<T extends StageOutput>(fn: () => Promise<T>): Promise<T> {
+  const t0 = performance.now();
+  const output = await fn();
+  output.telemetry = { durationMs: Math.round(performance.now() - t0), usage: output.usage ?? {} };
+  return output;
+}
+
+export function isClaudeUsage(u: unknown): u is ClaudeUsage {
+  return typeof u === "object" && u !== null && "input_tokens" in u;
+}
+
+export function logSessionSummary(sessionId: string, startMs: number, stages: StageOutput[]): void {
+  const totalDurationMs = Math.round(performance.now() - startMs);
+  let inputTokens = 0, outputTokens = 0, cacheReadTokens = 0, cacheWriteTokens = 0;
+  for (const stage of stages) {
+    const u = stage.usage;
+    if (isClaudeUsage(u)) {
+      inputTokens += u.input_tokens;
+      outputTokens += u.output_tokens;
+      cacheReadTokens += u.cache_read_input_tokens;
+      cacheWriteTokens += u.cache_creation_input_tokens;
+    }
+  }
+  // Pricing: Claude Opus 4.7 per 1M tokens — input $15, output $75, cache_read $1.50, cache_write $18.75
+  const estimatedCostUsd = (
+    (inputTokens * 15 + cacheReadTokens * 1.5 + cacheWriteTokens * 18.75 + outputTokens * 75) / 1_000_000
+  ).toFixed(4);
+  console.log(
+    `[session:${sessionId}] total=${totalDurationMs}ms tokens(in=${inputTokens} out=${outputTokens} cache_read=${cacheReadTokens} cache_write=${cacheWriteTokens}) est_cost=$${estimatedCostUsd}`,
+  );
 }
 
 async function runTypeCheck(stagingDir: string): Promise<StageOutput> {
@@ -138,7 +170,9 @@ async function refineCodeUntilTypeSafe(
       ? initialPromptConfig
       : { ...initialPromptConfig, variableTask: buildCodeRetryTask(spec, latestCode, latestTscFeedback || undefined, pendingTestFeedback) };
 
+    const attemptStart = performance.now();
     const codeOutput = await callClaude(promptConfig, "code", attempt + 1);
+    codeOutput.telemetry = { durationMs: Math.round(performance.now() - attemptStart), usage: codeOutput.usage ?? {} };
     await writeStage(sessionId, 2, "code", codeOutput);
 
     if (codeOutput.status !== "PASS") {
@@ -259,17 +293,26 @@ export function reducer(state: PipelineState, event: PipelineEvent): PipelineSta
 }
 
 function runTestsInVM(stagedTestPath: string): Promise<StageOutput> {
+  const vmBase = "/mnt/mac/Users/mikea/Developer/asset";
+  const stagingSessionDir = `${vmBase}/${dirname(stagedTestPath)}`;
+  const vmTmpDir = `/tmp/vm-staging-${basename(dirname(stagedTestPath))}`;
+  // sudo unshare --mount creates an isolated filesystem namespace so we can remount /mnt/mac read-only,
+  // preventing test code from writing to the host outside the staging directory.
+  // --net isolates the network namespace, blocking all outbound connections.
+  // Files are copied to a tmpfs so vitest writes stay in VM-local ephemeral storage.
+  const cmd =
+    `sudo unshare --mount --net bash -c ` +
+    `'mkdir -p ${vmTmpDir} && ` +
+    `mount -t tmpfs tmpfs ${vmTmpDir} && ` +
+    `cp ${stagingSessionDir}/generated-code.ts ${vmTmpDir}/ && ` +
+    `cp ${stagingSessionDir}/generated-tests.test.ts ${vmTmpDir}/ && ` +
+    `mount -o remount,ro /mnt/mac && ` +
+    `cd ${vmTmpDir} && ` +
+    `/home/mikea/asset-deps/node_modules/.bin/vitest run generated-tests.test.ts 2>&1'`;
   return new Promise((resolve) => {
     execFile(
       "orb",
-      [
-        "run",
-        "-m",
-        "asset-runner",
-        "bash",
-        "-c",
-        `cd /mnt/mac/Users/mikea/Developer/asset && ~/asset-deps/node_modules/.bin/vitest run ${stagedTestPath} 2>&1`,
-      ],
+      ["run", "-m", "asset-runner", "bash", "-c", cmd],
       { shell: false, timeout: 120_000 },
       (err, stdout, stderr) => {
         const content = stdout + stderr;
@@ -304,6 +347,7 @@ async function terminate(
 
 export async function runPipeline(spec: string): Promise<void> {
   assertEnv();
+  const pipelineStart = performance.now();
 
   const repoId = await getRepoId();
   configureMemory(repoId);
@@ -319,11 +363,11 @@ export async function runPipeline(spec: string): Promise<void> {
   let state: PipelineState = reducer({ status: "idle" }, { type: "START", spec });
 
   // Stage 0: Research (Tavily)
-  const research = await callResearch(
+  const research = await withTiming(() => callResearch(
     { systemPrompt: "", stableContext: "", variableTask: spec },
     "research",
     1,
-  );
+  ));
   await writeStage(sessionId, 0, "research", research);
   if (research.status !== "PASS") {
     state = reducer(state, { type: "FAILURE", failedStage: "research", error: research.content });
@@ -338,7 +382,7 @@ export async function runPipeline(spec: string): Promise<void> {
     stableContext: research.content,
     variableTask: `Create an implementation plan for:\n\n${spec}`,
   };
-  const plan = await callGemini(planConfig, "plan", 1, { displayName: GEMINI_CACHE_NAME });
+  const plan = await withTiming(() => callGemini(planConfig, "plan", 1, { displayName: GEMINI_CACHE_NAME }));
   await writeStage(sessionId, 1, "plan", plan);
   if (plan.status !== "PASS") {
     state = reducer(state, { type: "FAILURE", failedStage: "plan", error: plan.content });
@@ -391,7 +435,7 @@ export async function runPipeline(spec: string): Promise<void> {
       stableContext: cleanCode,
       variableTask: `Write tests for the following specification:\n\n${spec}`,
     };
-    const tests = await callClaude(testsConfig, "tests", 1);
+    const tests = await withTiming(() => callClaude(testsConfig, "tests", 1));
     await writeStage(sessionId, 3, "tests", tests);
     const fixedTests = tests.content.replace(/from ['"]\.\/\w+['"]/g, 'from "./generated-code"');
     const strippedTests = fixedTests.replace(/```(?:typescript|ts)?\n?/g, "").replace(/```/g, "").trim();
@@ -425,7 +469,7 @@ export async function runPipeline(spec: string): Promise<void> {
       stableContext: `SPEC:\n${spec}\n\nCODE:\n${code.content}\n\nTESTS:\n${fixedTests}`,
       variableTask: "Audit the code and tests against the specification above.",
     };
-    const preAudit = await callNemotron(preAuditConfig, "pre", "audit-pre", 1);
+    const preAudit = await withTiming(() => callNemotron(preAuditConfig, "pre", "audit-pre", 1));
     await writeStage(sessionId, 4, "audit-pre", preAudit);
     if (preAudit.status === "ESCALATE") {
       state = reducer(state, { type: "FAILURE", failedStage: "audit-pre", error: preAudit.content });
@@ -434,7 +478,7 @@ export async function runPipeline(spec: string): Promise<void> {
     state = reducer(state, { type: "AUDIT_PRE_PASS", output: preAudit });
 
     // Stage 5: VM execution (OrbStack)
-    vmOutput = await runTestsInVM(stagedTestPath);
+    vmOutput = await withTiming(() => runTestsInVM(stagedTestPath));
     await writeStage(sessionId, 5, "execution", vmOutput);
 
     if (vmOutput.status === "PASS") {
@@ -460,11 +504,13 @@ export async function runPipeline(spec: string): Promise<void> {
     stableContext: `SPEC:\n${spec}\n\nEXECUTION RESULTS:\n${vmOutput.content}`,
     variableTask: "Audit the execution results against the specification above.",
   };
-  const postAudit = await callNemotron(postAuditConfig, "post", "audit-post", 1);
+  const postAudit = await withTiming(() => callNemotron(postAuditConfig, "post", "audit-post", 1));
   await writeStage(sessionId, 6, "audit-post", postAudit);
 
   if (postAudit.status === "PASS") {
     state = reducer(state, { type: "AUDIT_POST_PASS", output: postAudit });
+    const allStages = Object.values(collectOutputs(state)).filter((s): s is StageOutput => s !== undefined);
+    logSessionSummary(sessionId, pipelineStart, allStages);
     await promoteStagedFiles(sessionId);
     await refreshCanonicalState(sessionId, GEMINI_CACHE_NAME);
     await finalizeSession(sessionId, { verdict: "PASS", summary: postAudit.content.slice(0, 500) });

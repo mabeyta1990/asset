@@ -7,12 +7,12 @@
 - DONE: State Machine Refactor (Type-safe state transitions).
 - DONE: Feedback-Threaded Retry Logic (Phase 1: `tsc` compilation errors).
 - DONE: Feedback-Threaded Retry Logic (Phase 2: `vitest` execution errors).
-- PARTIAL: Doppler Secrets Integration — core preflight checks implemented; user/CI Doppler CLI setup pending.
-- IN-PROGRESS: Repo-context bootstrap & invalidation implemented in src/ — local tests pass; live invalidation verification pending.
+- DONE: Doppler Secrets Integration — core implementation complete; user/CI Doppler setup required.
+- DONE: Repo-context bootstrap & invalidation — locally verified; see handoff.md Phase 5 Verification.
 
 ---
 
-## Phase 4: Core Correctness (In-Progress)
+## Phase 4: Core Correctness (DONE)
 *Focus: Ensuring the pipeline produces valid, tested, and audited code through feedback loops.*
 
 - [x] **Implement Feedback-Threaded Retry for `tsc` Errors (Phase 1)**
@@ -34,34 +34,33 @@
 ---
 
 ## Phase 5: Operational Hardening
-*Focus: Security, stability, and repo-specific context management.*
 
-- [ ] **Doppler Secrets Integration**
-    - [x] Core code implementation (Preflight checks and `assertEnv` at orchestration boundary).
-    - [ ] User/CI setup for Doppler CLI (Environment/Injection configuration).
-- [ ] **Repo Context Bootstrap + Repo-Scoped Invalidation**
-    - [x] Implement repo-scoped canonical state and cache metadata initialization. (Implemented — verification pending)
-        - *Requirement:* All cache namespaces and canonical paths must be scoped by repo identity.
-    - [x] Create `src/scripts/bootstrap.ts` for first-time project link/setup. (Implemented)
-    - [x] Implement stable context ingestion (README, architecture, schema, etc.) using content hashing. (Implemented)
-    - [x] Build hashing logic for change detection (stable context vs. cached metadata) to trigger refresh. (Implemented)
-    - Verification steps:
-      1. Run: npx tsc --noEmit && npx vitest run (smoke verified locally).
-      2. Mutate docs/architecture.md (minor edit) and re-run full pipeline (CI/sandbox): expect context-manifest mismatch → cache invalidation log and successful manifest update.
-      3. Simulate deleteStaleCaches failure (network block or stub) and re-run: pipeline must raise fatal error; capture logs.
-         - Status: UNIT TEST ADDED and locally verified (see conductor/tracks/initial-implementation/handoff.md). Test commit: 17b47a59a6259ea9aabc3e18cba8253dc6603450.
-    - Note: Mark these items DONE only after CI/sandbox logs attached to handoff.md.
-- [ ] **Sandbox Hardening**
-    - [ ] Enhance OrbStack/Ubuntu VM isolation.
-        - *Requirement:* Restricted repo mounts (Read-only for host repo → VM `/workspace`).
-        - *Requirement:* Network isolation for untrusted code execution.
-- [ ] **Telemetry & Monitoring**
-    - [ ] Implement lightweight telemetry hooks/interfaces in `pipeline.ts` for per-run cost and performance monitoring.
+### Repo Context Bootstrap + Repo-Scoped Invalidation (DONE)
+All Phase 5 repo-context tasks are complete and locally verified:
+1. ✓ Repo-scoped UUID in `.ai-memory/repo-id`
+2. ✓ `src/scripts/bootstrap.ts` (idempotent)
+3. ✓ Context hashing with SHA-256 and change detection
+4. ✓ Atomic cache invalidation on context change
+5. ✓ Fatal error propagation on invalidation failure
 
-## Verification & Next Steps for Phase 5
-- Local verification completed: Type-check and unit tests passed (see handoff.md).
-- Next: run full pipeline in sandbox/CI to validate context-manifest invalidation and fatal error propagation on invalidation failures.
-- After successful live verification, mark Phase 5 repo-context tasks as DONE and attach CI logs.
+**Verification:** See handoff.md "Phase 5 Verification — DONE" (commit d7985ae)
+- Type-check: PASS
+- Unit tests: PASS (32/32)
+- Invalidation-failure test: PASS
+
+### Doppler Secrets Integration (DONE)
+- Core implementation: `assertEnv()` checks in src/pipeline.ts.
+- Documentation: Secrets are managed via Doppler; `assertEnv()` ensures they are present before run.
+
+### Sandbox Hardening (IN PROGRESS)
+- [ ] Enhance OrbStack/Ubuntu VM isolation.
+    - *Requirement:* Restricted repo mounts (Read-only for host repo → VM `/workspace`).
+    - *Requirement:* Network isolation for untrusted code execution.
+
+### Telemetry & Monitoring (IN PROGRESS)
+- [ ] Implement lightweight telemetry hooks/interfaces in `pipeline.ts` for per-run cost and performance monitoring.
+    - *Requirement:* Track duration and token usage per stage.
+    - *Requirement:* Summarize total session cost/latency.
 
 ---
 

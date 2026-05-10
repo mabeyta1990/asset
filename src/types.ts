@@ -17,6 +17,11 @@ export interface ClaudeUsage {
   cache_read_input_tokens: number;
 }
 
+export interface Telemetry {
+  durationMs: number;
+  usage: ClaudeUsage | Record<string, number>;
+}
+
 export interface StageOutput {
   stage: StageName;
   status: StageVerdict;
@@ -25,6 +30,7 @@ export interface StageOutput {
   timestamp: string;
   attempt: number;
   feedback?: string;
+  telemetry?: Telemetry;
 }
 
 export interface SessionState {

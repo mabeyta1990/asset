@@ -1,140 +1,190 @@
-# Handoff: Repo Context Bootstrap + Invalidation
+# Handoff: Sandbox Hardening + Telemetry
 
 ## Objective
-Implement a robust initialization and change-detection system for the ASSET pipeline. This ensures that the pipeline's cache and canonical state are strictly scoped to the repository and automatically invalidated when core project documentation or schemas change.
+Enhance the ASSET pipeline with secure execution isolation and performance/cost monitoring.
 
 ## Tasks
-1. **Initialize Repo-Scoped State:** 
-   - Define a static UUID in `.ai-memory/repo-id`. If `.ai-memory/repo-id` already exists, read and return the existing UUID. Generate and write a new UUID only on first run.
-   - Ensure `src/memory.ts` and `src/cache/refresh.ts` use this ID to partition cache and canonical data.
-2. **Implement `src/scripts/bootstrap.ts`:**
-   - Create a CLI script to perform one-time project setup.
-3. **Stable Context Hashing:**
-   - Implement a utility to scan `docs/` and project schemas.
-   - Generate a manifest of content hashes.
-   - Create a `checkContextChange()` function to compare current hashes against the stored manifest, triggering a full cache invalidation if detected.
-   - **Fatal Failure:** If an invalidation or state update error occurs, the pipeline MUST terminate with a fatal error.
+
+### 1. Telemetry & Monitoring
+- **Update Types:** Define a `Telemetry` interface in `src/types.ts` to track:
+  - `durationMs`: Execution time for the stage.
+  - `usage`: Token counts (input, output, cache_read, cache_write).
+- **Implement Hooks:** Update `src/pipeline.ts` to:
+  - Measure duration for each stage call.
+  - Aggregate `usage` from model responses (Claude and Gemini).
+  - Add a `SessionSummary` at the end of `runPipeline` that logs total duration and estimated cost.
+- **Stage Metadata:** Ensure `StageOutput` includes this telemetry data.
+
+### 2. Sandbox Hardening
+- **Restrict VM Mounts:** Update `runTestsInVM` in `src/pipeline.ts` to use a more isolated approach.
+  - *Goal:* Instead of mounting the entire repo, only mount the necessary staging directory and a read-only view of the source code if needed.
+  - *Constraint:* Ensure `vitest` can still find its dependencies (likely by keeping `~/asset-deps` in the VM).
+- **Network Isolation:** Investigate and implement a way to disable network access during the `vitest run` within the VM.
+  - *Possible approach:* `unshare -n` or firewall rules inside the VM.
 
 ## Requirements
-- **No direct edits to `package.json` or `tsconfig.json`.**
-- **Idempotency:** `bootstrap.ts` must be safe to run multiple times.
-- **Hashing:** Use `SHA-256` for file contents.
-- **Isolation:** All generated metadata must be stored within the `.ai-memory/` directory.
+- **Types:** Maintain strict TypeScript safety.
+- **Performance:** Telemetry overhead must be negligible.
+- **Security:** Sandbox must prevent untrusted code from reaching the network or modifying the host repo outside the session staging directory.
 
 ## Constraints
-- **Scope:** Changes restricted to `src/` (excluding `wrappers/`), `src/scripts/`, and `src/pipeline.ts`.
-- **Integration:** The `runPipeline` entry point must call the validation check before beginning any new session.
+- **Scope:** Changes restricted to `src/types.ts` and `src/pipeline.ts`.
+- **Sandbox:** Must use the existing OrbStack `asset-runner` machine.
 
 ## Verification
-- Verify that modifying a file in `docs/` triggers a hash mismatch on the next pipeline run.
-- Verify that the cache is properly invalidated/refreshed upon detecting the change.
-- Confirm that cache invalidation errors result in a fatal pipeline failure.
+- **Telemetry:** Confirm session JSON files contain `telemetry` objects with realistic durations and token counts.
+- **Sandbox:**
+  - Verify that a test attempting to `fetch()` from the internet fails during VM execution.
+  - Verify that a test attempting to write to a file outside `/mnt/mac/.../staging` fails or is blocked.
+
+# Handoff: Sandbox Hardening + Telemetry
+
+## Objective
+Enhance the ASSET pipeline with secure execution isolation and performance/cost monitoring.
+
+## Tasks
+- **Update Types:** Define a `Telemetry` interface in `src/types.ts` to track:
+  - `durationMs`: Execution time for the stage.
+  - `usage`: Token counts (input, output, cache_read, cache_write).
+- **Implement Hooks:** Update `src/pipeline.ts` to:
+  - Measure duration for each stage call.
+  - Aggregate `usage` from model responses (Claude and Gemini).
+  - Add a `SessionSummary` at the end of `runPipeline` that logs total duration and estimated cost.
+- **Stage Metadata:** Ensure `StageOutput` includes this telemetry data.
+
+## Requirements
+- **Types:** Maintain strict TypeScript safety.
+- **Performance:** Telemetry overhead must be negligible.
+- **Security:** Sandbox must prevent untrusted code from reaching the network or modifying the host repo outside the session staging directory.
+
+## Constraints
+- **Scope:** Changes restricted to `src/types.ts` and `src/pipeline.ts`.
+- **Sandbox:** Must use the existing OrbStack `asset-runner` machine.
+
+## Verification
+- **Telemetry:** Confirm session JSON files contain `telemetry` objects with realistic durations and token counts.
+- **Sandbox:**
+  - Verify that a test attempting to `fetch()` from the internet fails during VM execution.
+  - Verify that a test attempting to write to a file outside `/mnt/mac/.../staging` fails or is blocked.
 
 ## Status
- - Task State: REVIEW_REQUIRED
- - Assigned To: Gemini CLI
+ - Overall Track Status: `in-progress` (Phase 5: Operational Hardening)
+ - Current Handoff Status: `review_required` (awaiting resolution of blockers)
 
 ## Implementation Notes
-- Created `src/context-hash.ts`: exports `getRepoId()`, `computeHash()`, `manifestsMatch()`, `checkContextChange()`.
-  - `getRepoId()` reads `.ai-memory/repo-id`; generates and writes a UUID on first run.
-  - `checkContextChange(repoId, readCanonical, deleteCache)` accepts injected dependencies to keep it testable and avoid deep coupling. It scans `docs/` + `package.json`/`tsconfig.json` with SHA-256, compares against stored manifest at `.ai-memory/{repoId}/canonical/context-manifest.json`. On first run, stores manifest (no invalidation). On change, calls `deleteCache` for the stored Gemini cache name, then writes the new manifest. Any error is re-thrown as `"Fatal: context invalidation failed — ..."`.
-- `src/memory.ts`: added `configureMemory(repoId)` which sets the sessions root to `.ai-memory/{repoId}/sessions/`.
-- `src/cache/canonical.ts`: added `configureCanonical(repoId)` which scopes all reads to `.ai-memory/{repoId}/canonical/`.
-- `src/cache/refresh.ts`: added `configureRefresh(repoId)` (scopes canonical + staging dirs) and `getStagingDir()` getter. Removed `STAGING_DIR`/`CANONICAL_DIR` hardcoded constants, replaced with `let` variables.
-- `src/pipeline.ts`: `runPipeline` now calls `getRepoId()`, then configures all three modules, then `checkContextChange()`, before `initSession()`. `stagingDir` is now derived via `getStagingDir()`.
-- `src/scripts/bootstrap.ts`: idempotent CLI script that calls `getRepoId()` and `mkdir -p` for all three repo-scoped subdirectories.
-- `src/context-hash.test.ts`: 13 unit tests covering `computeHash` (determinism, known SHA-256) and `manifestsMatch` (add/remove/change/order-independent).
-- `tsc --noEmit` passes clean. `vitest run` passes all 31 tests.
+
+### Telemetry (`src/types.ts`, `src/pipeline.ts`)
+- Added `Telemetry` interface (`durationMs: number`, `usage: ClaudeUsage | Record<string, number>`) to `src/types.ts`.
+- Added optional `telemetry?: Telemetry` field to `StageOutput`.
+- Added `withTiming<T>` helper in `pipeline.ts` that wraps any stage call, measures wall-clock duration via `performance.now()`, and mutates the returned `StageOutput` with `telemetry` before it reaches `writeStage`. This ensures telemetry is present in the session JSON files.
+- For the code stage (written inside `refineCodeUntilTypeSafe`), timing is attached per-attempt immediately before the internal `writeStage` call.
+- `logSessionSummary` aggregates Claude-format token counts across all stages and logs a single summary line with total wall-clock duration and an estimated cost (Claude Opus 4.7 pricing). It is called at the end of `runPipeline` after the state machine reaches `completed`.
+
+### Sandbox Hardening (`src/pipeline.ts`)
+- `runTestsInVM` now CDs into the specific staging session directory (`/mnt/mac/Users/mikea/Developer/asset/<staging-session-dir>`) instead of the repo root, limiting the process's working context to just the staged files.
+- Added `unshare -n` before the `vitest` invocation to run tests in an isolated network namespace with no outbound connectivity.
+
+## Verification Results (post-implementation)
+
+### unshare Gate
+- `unshare -n true` in the `asset-runner` VM → **FAILED** (Operation not permitted, no unprivileged user namespaces)
+- `unshare --user --net true` → **OK** — network namespace works via user namespace combination
+- `sudo unshare --mount --net` + `mount -o remount,ro /mnt/mac` → **OK** — host writes blocked (EROFS); tested with Desktop write attempt
+
+### Sandbox hardening revised approach (reflected in code)
+- Code updated to use `sudo unshare --mount --net`: creates isolated mount + network namespaces
+- Staged files are copied to a `tmpfs` inside the VM before `/mnt/mac` is remounted read-only
+- vitest binary path changed from `~/asset-deps/...` to `/home/mikea/asset-deps/...` (sudo changes `~` to `/root`)
+- Both network isolation and write isolation are verified in VM
+
+### Sandbox verification tests (run via VM)
+- `src/scripts/sandbox-verify-network.test.ts` — 2/2 pass: TCP connect and HTTP GET both fail under network isolation
+- `src/scripts/sandbox-verify-writes.test.ts` — 4/4 pass: writes to 3 host paths outside staging throw EROFS; write to /tmp succeeds
+
+### Telemetry unit tests
+- `src/pipeline.test.ts` — 15/15 pass: covers `withTiming`, `isClaudeUsage`, `logSessionSummary`, and JSON shape
+
+### Live pipeline smoke test
+- **BLOCKED**: `TAVILY_API_KEY` in `.env` is a dummy placeholder (`dummy-tavi...`). The research stage (Stage 0) fails on first API call. A valid Tavily key is required to generate a session JSON with real telemetry fields.
 
 ## Blockers
-None.
 
-## Local Verification
-- Type-check: PASS (npx tsc --noEmit)
-- Unit tests: PASS (vitest — 32 tests, +1 invalidation-failure test)
-- Verification command: npx tsc --noEmit && npx vitest run
-- Verified on: 2026-05-09
-- Invalidation-failure test: PASS (src/context-hash.invalidation.test.ts — commit 3d96941)
+- **Live pipeline smoke test**: Requires a valid `TAVILY_API_KEY`. All other logic (telemetry, sandbox) is covered by unit and VM integration tests.
+
+## Remaining risks
+1. Cost estimate uses Claude Opus 4.7 rates only; Gemini and Nemotron usage keys are non-standard and not priced.
+2. Session JSON telemetry has not been confirmed in a live run (blocked on Tavily key); shape is validated by unit test.
+3. Vitest binary path `/home/mikea/asset-deps/...` is hardcoded; will break if VM username changes.
 
 ## Handoff Back to Gemini
-Implementation complete. All tasks in the handoff are fulfilled:
-1. `.ai-memory/repo-id` UUID scheme implemented and wired into session/canonical/staging paths.
-2. `src/scripts/bootstrap.ts` is idempotent and initializes all three repo-scoped directories.
-3. Context hashing scans `docs/` + project schemas with SHA-256, stores manifest per repo, and triggers full Gemini cache invalidation on change with fatal error propagation.
-4. `runPipeline` calls `checkContextChange` before any session begins.
 
-Pending verification steps (require live pipeline run):
-- Mutate a `docs/` file and confirm hash mismatch triggers Gemini cache deletion on next run.
-- Confirm invalidation errors (e.g., network failure during `deleteStaleCaches`) surface as fatal pipeline termination.
+**Changed files:** `src/types.ts`, `src/pipeline.ts`, `src/pipeline.test.ts`, `src/scripts/sandbox-verify-network.test.ts`, `src/scripts/sandbox-verify-writes.test.ts`
 
-## Handoff for Claude: Add unit test for invalidation failure — COMPLETED
+**Verification performed:**
+- `npx tsc --noEmit` passes with zero errors.
+- `npx vitest run src/pipeline.test.ts` — 15/15 pass.
+- Sandbox network isolation: 2/2 VM tests pass.
+- Sandbox write isolation: 4/4 VM tests pass (EROFS on all host writes outside staging).
+- `unshare -n` → replaced with `sudo unshare --mount --net` + tmpfs + `mount -o remount,ro /mnt/mac`.
 
-Summary
-- The invalidation-failure unit test has been added at `src/context-hash.invalidation.test.ts` and committed.
-- Commit: 17b47a59a6259ea9aabc3e18cba8253dc6603450
-- Local verification: `npx vitest run src/context-hash.invalidation.test.ts` — PASS (see Local Verification notes below).
+**Remaining risks:**
+1. Cost estimate uses Claude Opus 4.7 rates only; Gemini and Nemotron usage keys are non-standard and not priced.
+2. Session JSON telemetry has not been confirmed in a live run (blocked on Tavily key); shape is validated by unit test.
+3. Vitest binary path `/home/mikea/asset-deps/...` is hardcoded; will break if VM username changes.
+ - Assigned To: Claude Code
 
-Notes
-- The test simulates a `deleteCache` failure and asserts `checkContextChange` rethrows an error whose message starts with `Fatal: context invalidation failed`.
-- This satisfies plan.md verification step #3 at the unit-test level; live CI/sandbox validation still pending.
+## Implementation Notes
 
-Next actions for Gemini
-- Attach the local test run output and commit SHA to the handoff record.
-- Run the full pipeline in sandbox/CI to confirm manifest mismatch triggers cache invalidation and that invalidation errors propagate as fatal failures in the live environment.
+### Telemetry (`src/types.ts`, `src/pipeline.ts`)
+- Added `Telemetry` interface (`durationMs: number`, `usage: ClaudeUsage | Record<string, number>`) to `src/types.ts`.
+- Added optional `telemetry?: Telemetry` field to `StageOutput`.
+- Added `withTiming<T>` helper in `pipeline.ts` that wraps any stage call, measures wall-clock duration via `performance.now()`, and mutates the returned `StageOutput` with `telemetry` before it reaches `writeStage`. This ensures telemetry is present in the session JSON files.
+- For the code stage (written inside `refineCodeUntilTypeSafe`), timing is attached per-attempt immediately before the internal `writeStage` call.
+- `logSessionSummary` aggregates Claude-format token counts across all stages and logs a single summary line with total wall-clock duration and an estimated cost (Claude Opus 4.7 pricing). It is called at the end of `runPipeline` after the state machine reaches `completed`.
 
-Local Verification (added)
-- Test file: `src/context-hash.invalidation.test.ts`
-- Commit: 17b47a59a6259ea9aabc3e18cba8253dc6603450
-- Verification command: `npx vitest run src/context-hash.invalidation.test.ts`
-- Result: PASS
+### Sandbox Hardening (`src/pipeline.ts`)
+- `runTestsInVM` now CDs into the specific staging session directory (`/mnt/mac/Users/mikea/Developer/asset/<staging-session-dir>`) instead of the repo root, limiting the process's working context to just the staged files.
+- Added `unshare -n` before the `vitest` invocation to run tests in an isolated network namespace with no outbound connectivity.
 
-Handoff Back to Gemini
-- The unit-test verification is complete locally. Remaining work: run the full pipeline in an isolated sandbox/CI and attach logs to this handoff. Once CI logs are attached, mark Phase 5 repo-context verification as DONE.
+## Verification Results (post-implementation)
 
----
+### unshare Gate
+- `unshare -n true` in the `asset-runner` VM → **FAILED** (Operation not permitted, no unprivileged user namespaces)
+- `unshare --user --net true` → **OK** — network namespace works via user namespace combination
+- `sudo unshare --mount --net` + `mount -o remount,ro /mnt/mac` → **OK** — host writes blocked (EROFS); tested with Desktop write attempt
 
-## Phase 5 Verification — DONE
+### Sandbox hardening revised approach (reflected in code)
+- Code updated to use `sudo unshare --mount --net`: creates isolated mount + network namespaces
+- Staged files are copied to a `tmpfs` inside the VM before `/mnt/mac` is remounted read-only
+- vitest binary path changed from `~/asset-deps/...` to `/home/mikea/asset-deps/...` (sudo changes `~` to `/root`)
+- Both network isolation and write isolation are verified in VM
 
-**Verified:** 2026-05-10T05:36:10Z  
-**Commit:** d7985ae (HEAD, main)  
-**No separate CI system is configured for this repo; verification performed locally against the committed code.**
+### Sandbox verification tests (run via VM)
+- `src/scripts/sandbox-verify-network.test.ts` — 2/2 pass: TCP connect and HTTP GET both fail under network isolation
+- `src/scripts/sandbox-verify-writes.test.ts` — 4/4 pass: writes to 3 host paths outside staging throw EROFS; write to /tmp succeeds
 
-### Log: Type Check
+### Telemetry unit tests
+- `src/pipeline.test.ts` — 15/15 pass: covers `withTiming`, `isClaudeUsage`, `logSessionSummary`, and JSON shape
 
-```
-npx tsc --noEmit
-Exit code: 0 (clean — no output)
-```
+### Live pipeline smoke test
+- **BLOCKED**: `TAVILY_API_KEY` in `.env` is a dummy placeholder (`dummy-tavi...`). The research stage (Stage 0) fails on first API call. A valid Tavily key is required to generate a session JSON with real telemetry fields.
 
-### Log: Full Test Suite
+## Blockers
 
-```
-npx vitest run
+- **Live pipeline smoke test**: Requires a valid `TAVILY_API_KEY`. All other logic (telemetry, sandbox) is covered by unit and VM integration tests.
 
- RUN  v4.1.5 /Users/mikea/Developer/asset
+## Handoff Back to Gemini
 
- Test Files  3 passed (3)
-      Tests  32 passed (32)
-   Start at  22:36:03
-   Duration  146ms (transform 87ms, setup 0ms, import 131ms, tests 14ms, environment 0ms)
-```
+**Changed files:** `src/types.ts`, `src/pipeline.ts`, `src/pipeline.test.ts`, `src/scripts/sandbox-verify-network.test.ts`, `src/scripts/sandbox-verify-writes.test.ts`
 
-### Log: Invalidation-Failure Test (isolated)
+**Verification performed:**
+- `npx tsc --noEmit` passes with zero errors.
+- `npx vitest run src/pipeline.test.ts` — 15/15 pass.
+- Sandbox network isolation: 2/2 VM tests pass.
+- Sandbox write isolation: 4/4 VM tests pass (EROFS on all host writes outside staging).
+- `unshare -n` → replaced with `sudo unshare --mount --net` + tmpfs + `mount -o remount,ro /mnt/mac`.
 
-```
-npx vitest run src/context-hash.invalidation.test.ts --reporter=verbose
-
- RUN  v4.1.5 /Users/mikea/Developer/asset
-
- ✓ src/context-hash.invalidation.test.ts > checkContextChange — invalidation failure > rethrows deleteCache failure as Fatal error 4ms
-
- Test Files  1 passed (1)
-      Tests  1 passed (1)
-   Start at  22:36:10
-   Duration  102ms (transform 11ms, setup 0ms, import 19ms, tests 5ms, environment 0ms)
-```
-
-### Summary
-
-All 32 tests pass (3 test files). The invalidation-failure test confirms `checkContextChange` rethrows `deleteCache` errors as `Fatal: context invalidation failed …`. Type check is clean. Phase 5 repo-context verification is **DONE**.
-
+**Remaining risks:**
+1. Cost estimate uses Claude Opus 4.7 rates only; Gemini and Nemotron usage keys are non-standard and not priced.
+2. Session JSON telemetry has not been confirmed in a live run (blocked on Tavily key); shape is validated by unit test.
+3. Vitest binary path `/home/mikea/asset-deps/...` is hardcoded; will break if VM username changes.
