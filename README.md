@@ -20,35 +20,17 @@ Each stage uses the best available model for that task by default, but can be ov
 
 A session is written to disk at each stage. If any stage returns `ESCALATE`, the pipeline halts and exits with code 2. `FAIL` also halts (except pre-audit, which lets the pipeline continue to VM execution). On full `PASS`, the canonical Gemini context cache is refreshed.
 
-### Configurable Model Selection
+### Telemetry & Cost Monitoring
 
-You can override the default models for any task by providing a `models` object in the task specification, or by using CLI flags.
+ASSET tracks operational telemetry (token usage, cache hits, retries) and calculates real-time costs based on the May 2026 pricing registry.
 
-#### Via Task Specification (JSON)
-
-```json
-{
-  "id": "my-complex-task",
-  "title": "Complex Feature",
-  "description": "...",
-  "models": {
-    "plan": "gemini-1-5-pro",
-    "code": "claude-opus-4-7",
-    "audit": "nemotron-audit"
-  }
-}
-```
-
-#### Via CLI Flags
-
-CLI overrides take precedence over TaskSpec models:
+To view a summary of costs incurred across all sessions:
 
 ```bash
-npm run asset -- "Write a debounce function" --model-code claude-opus-4-7 --model-plan gemini-1-5-pro
+npm run asset -- cost --summary
 ```
 
-Supported stage keys: `research`, `plan`, `code`, `audit`.
-Supported models include Claude (Opus/Sonnet/Haiku), Gemini (Pro), GLM, and Nemotron.
+This command generates a breakdown of costs by Model, Pipeline Stage, and Task ID.
 
 
 ## Agents Overview

@@ -1,9 +1,12 @@
 import { readFile } from "node:fs/promises";
 import { runPipeline } from "../pipeline.js";
+import { getRepoId } from "../context-hash.js";
+import { aggregateCosts, formatCostBreakdown } from "../pricing/aggregator.js";
 import type { TaskSpec, TaskStageKey } from "../types.js";
 
 interface CliArgs {
-  input: string;
+  command?: string;
+  input?: string;
   modelOverrides: Partial<Record<TaskStageKey, string>>;
 }
 
@@ -12,11 +15,18 @@ function parseArgs(): CliArgs {
 
   if (args.length === 0) {
     console.error("Usage: asset <spec> [--model-code MODEL] [--model-plan MODEL] [--model-research MODEL] [--model-audit MODEL]");
-    console.error("       asset <path-to-taskspec.json> [--model-code MODEL] [--model-plan MODEL] [--model-research MODEL] [--model-audit MODEL]");
+    console.error("       asset cost --summary");
     process.exit(1);
   }
 
-  const input = args[0].trim();
+  const firstArg = args[0].trim();
+
+  // Check for cost subcommand
+  if (firstArg === "cost" && args[1] === "--summary") {
+    return { command: "cost", modelOverrides: {} };
+  }
+
+  const input = firstArg;
   const modelOverrides: Partial<Record<TaskStageKey, string>> = {};
 
   // Parse optional model override flags
@@ -40,7 +50,29 @@ function parseArgs(): CliArgs {
 }
 
 async function main(): Promise<void> {
-  const { input, modelOverrides } = parseArgs();
+  const { command, input, modelOverrides } = parseArgs();
+
+  // Handle cost subcommand
+  if (command === "cost") {
+    try {
+      const repoId = await getRepoId();
+      const sessionsDir = `.ai-memory/${repoId}/sessions`;
+      const breakdown = await aggregateCosts(sessionsDir);
+      console.log(formatCostBreakdown(breakdown));
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error("Cost aggregation error:", msg);
+      process.exit(1);
+    }
+    return;
+  }
+
+  if (!input) {
+    console.error("Usage: asset <spec> [--model-code MODEL] [--model-plan MODEL] [--model-research MODEL] [--model-audit MODEL]");
+    console.error("       asset cost --summary");
+    process.exit(1);
+  }
+
   let taskOrSpec: string | TaskSpec;
 
   // Check if input looks like a file path (ends with .json) or is a plain string

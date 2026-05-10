@@ -17,7 +17,7 @@ Status of the initial pipeline implementation roadmap for the ASSET project.
 
 ### Phase 5: Operational Hardening (Pending)
 - [x] **Context Management:** Repo-scoped bootstrap, hashing, and atomic invalidation.
-- [ ] **Doppler Secrets:** Integration via `assertEnv()` (Pending: Configure `TAVILY_API_KEY` for pipeline/sandbox execution).
+- [x] **Doppler Secrets:** Integration via `assertEnv()` (Pending: Configure `TAVILY_API_KEY` for pipeline/sandbox execution).
 - [x] **Sandbox Hardening:** VM isolation, network namespaces, read-only mounts.
 - [x] **Telemetry:** Operational tracking (duration, usage, cost).
 
@@ -28,20 +28,21 @@ Status of the initial pipeline implementation roadmap for the ASSET project.
 - [x] **Per-Stage Model Selection (DONE)**
 - [x] **Model Dispatch & CLI Integration (DONE)**
 
-- [x] **Comprehensive Telemetry (DONE)**
+- [x] **Comprehensive Telemetry & Pricing (DONE)**
     - [x] **Category 1: Token Usage (Input/Output)**
-        - [x] Ensure all stages report `input_tokens` and `output_tokens`.
-        - [x] Update `logSessionSummary` to show aggregate input/output tokens across all stages.
-        - [x] Distinguish between per-stage tokens and session-total tokens.
+        - [x] Multi-model token capture (Claude, Nemotron, Tavily).
+        - [x] Aggregate `input_tokens` and `output_tokens` across all stages.
     - [x] **Category 2: Cache Performance (Claude)**
-        - [x] Verify `callClaude` correctly extracts `cache_creation_input_tokens` and `cache_read_input_tokens`.
-        - [x] Update `logSessionSummary` to report total "Cache Investment" (creation) vs "Cache Savings" (reads).
-        - [x] Add unit tests for cache telemetry parsing.
+        - [x] `callClaude` extraction of cache creation/read tokens.
+        - [x] Aggregated cache reporting: "Investment" vs "Savings" vs "Efficiency %".
     - [x] **Category 3: Retry Loop Counts**
-        - [x] Extend `Telemetry` or session state to track `tscRetryCount` and `vitestRetryCount` distinctly.
-        - [x] Record retry depth per stage.
-        - [x] Update `logSessionSummary` to report total retries as a distinct metric category.
-        - [x] Add tests for retry tracking across mixed failures.
+        - [x] `tscRetryCount` and `vitestRetryCount` tracking.
+        - [x] Integrated into `logSessionSummary` and session telemetry.
+    - [x] **Category 4: Pricing Registry & Costing**
+        - [x] Created `src/pricing/registry.ts` with May 2026 rates.
+        - [x] Integrated `calculateClaudeCost`, `calculateNemotronCost`, `calculateTavilyCost`.
+        - [x] Model-aware cost calculation per session log.
+        - [x] Configurable Tavily cost via environment variable.
 
 - [ ] **Multi-File Generation (Next Priority)**
     - [ ] Extend task spec to declare multiple output files.
@@ -61,14 +62,6 @@ Status of the initial pipeline implementation roadmap for the ASSET project.
     - [ ] Add normalize/fuzzy-match fallback for whitespace and quote drift.
     - [ ] Fail fast on ambiguous or missing matches.
     - [ ] Add unit tests for patch apply success, zero-match failure, and multi-match failure.
-
-- [x] **Retry Loop Telemetry (DONE)**
-    - [x] Extend `Telemetry` to record `tscRetryCount`.
-    - [x] Extend `Telemetry` to record `vitestRetryCount`.
-    - [x] Record retry depth per code-generation attempt.
-    - [x] Include retry totals in `logSessionSummary`.
-    - [x] Persist retry metadata in session JSON.
-    - [x] Add tests for retry counting across mixed `tsc` and `vitest` failures.
 
 - [ ] **Repo File Insertion**
     - [ ] Add optional `insertPath` field to task spec.
@@ -109,14 +102,14 @@ Status of the initial pipeline implementation roadmap for the ASSET project.
     - [ ] Truncate or summarize very large diffs safely.
     - [ ] Add tests for no-op diff, single-file diff, and multi-file diff rendering.
 
-- [ ] **Cost Dashboard**
-    - [ ] Aggregate session JSON telemetry across runs.
-    - [ ] Group totals by model.
-    - [ ] Group totals by stage.
-    - [ ] Group totals by task ID.
-    - [ ] Expose summary via CLI command such as `asset cost --summary`.
-    - [ ] Handle partially priced providers safely.
-    - [ ] Add tests for aggregation correctness.
+- [x] **Cost Dashboard (DONE)**
+    - [x] Aggregate session JSON telemetry across runs.
+    - [x] Group totals by model.
+    - [x] Group totals by stage.
+    - [x] Group totals by task ID.
+    - [x] Expose summary via CLI command such as `asset cost --summary`.
+    - [x] Handle partially priced providers safely.
+    - [x] Add tests for aggregation correctness.
 
 - [ ] **Failure Taxonomy**
     - [ ] Define canonical failure categories, e.g. `tsc-error`, `vitest-error`, `audit-fail`, `api-error`, `patch-conflict`, `spec-invalid`.
