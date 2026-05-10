@@ -2,8 +2,10 @@ import { execFile } from "node:child_process";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { PromptConfig, StageName, StageOutput, StageVerdict, PipelineState, PipelineEvent } from "./types.js";
-import { initSession, writeStage, finalizeSession } from "./memory.js";
-import { promoteStagedFiles, refreshCanonicalState } from "./cache/refresh.js";
+import { configureMemory, initSession, writeStage, finalizeSession } from "./memory.js";
+import { configureRefresh, getStagingDir, promoteStagedFiles, refreshCanonicalState, deleteStaleCaches } from "./cache/refresh.js";
+import { configureCanonical, readCanonicalState } from "./cache/canonical.js";
+import { getRepoId, checkContextChange } from "./context-hash.js";
 import { callResearch } from "./wrappers/research.js";
 import { callGemini } from "./wrappers/gemini.js";
 import { callClaude } from "./wrappers/claude.js";
@@ -12,7 +14,6 @@ import { callNemotron } from "./wrappers/nemotron.js";
 const GEMINI_CACHE_NAME = "asset-canonical-context";
 const MAX_RETRIES_CODE_GENERATION = 3;
 const MAX_RETRIES_TEST_FAILURE = 3;
-const STAGING_DIR = ".ai-memory/staging";
 
 const REQUIRED_ENV_VARS = [
   "ANTHROPIC_API_KEY",
@@ -303,8 +304,16 @@ async function terminate(
 
 export async function runPipeline(spec: string): Promise<void> {
   assertEnv();
+
+  const repoId = await getRepoId();
+  configureMemory(repoId);
+  configureRefresh(repoId);
+  configureCanonical(repoId);
+
+  await checkContextChange(repoId, readCanonicalState, deleteStaleCaches);
+
   const sessionId = await initSession(spec);
-  const stagingDir = join(STAGING_DIR, sessionId);
+  const stagingDir = join(getStagingDir(), sessionId);
   await mkdir(stagingDir, { recursive: true });
 
   let state: PipelineState = reducer({ status: "idle" }, { type: "START", spec });

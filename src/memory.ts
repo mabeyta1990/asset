@@ -3,7 +3,11 @@ import { dirname, join } from "node:path";
 import { randomBytes } from "node:crypto";
 import type { StageName, StageOutput, SessionState, StageVerdict } from "./types.js";
 
-const SESSIONS_ROOT = ".ai-memory/sessions";
+let sessionsRoot = ".ai-memory/sessions";
+
+export function configureMemory(repoId: string): void {
+  sessionsRoot = `.ai-memory/${repoId}/sessions`;
+}
 
 const STAGE_NAMES: Record<number, StageName> = {
   0: "research",
@@ -29,12 +33,12 @@ function stageFilename(stageIndex: number, stageName: StageName): string {
 function resolveStageFile(sessionId: string, stageIndex: number): string {
   const name = STAGE_NAMES[stageIndex];
   if (name === undefined) throw new Error(`Unknown stage index: ${stageIndex}`);
-  return join(SESSIONS_ROOT, sessionId, stageFilename(stageIndex, name));
+  return join(sessionsRoot, sessionId, stageFilename(stageIndex, name));
 }
 
 export async function initSession(spec: string): Promise<string> {
   const sessionId = new Date().toISOString().replace(/[:.]/g, "-");
-  const sessionDir = join(SESSIONS_ROOT, sessionId);
+  const sessionDir = join(sessionsRoot, sessionId);
   await mkdir(sessionDir, { recursive: true });
 
   const state: SessionState = {
@@ -54,7 +58,7 @@ export async function writeStage(
   stageName: StageName,
   output: StageOutput,
 ): Promise<void> {
-  const sessionDir = join(SESSIONS_ROOT, sessionId);
+  const sessionDir = join(sessionsRoot, sessionId);
   await atomicWrite(
     join(sessionDir, stageFilename(stageIndex, stageName)),
     JSON.stringify(output, null, 2),
@@ -77,7 +81,7 @@ export async function finalizeSession(
   sessionId: string,
   result: { verdict: StageVerdict; summary?: string },
 ): Promise<void> {
-  const sessionDir = join(SESSIONS_ROOT, sessionId);
+  const sessionDir = join(sessionsRoot, sessionId);
   const now = new Date().toISOString();
 
   await atomicWrite(
@@ -94,5 +98,5 @@ export async function finalizeSession(
 }
 
 export async function archiveSession(sessionId: string): Promise<void> {
-  await writeFile(join(SESSIONS_ROOT, sessionId, "COMPLETE"), "", "utf8");
+  await writeFile(join(sessionsRoot, sessionId, "COMPLETE"), "", "utf8");
 }

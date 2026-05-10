@@ -7,10 +7,17 @@ import type { CanonicalState } from "../types.js";
 import { readCanonicalState } from "./canonical.js";
 import { deleteCacheByDisplayName } from "../wrappers/gemini.js";
 
-const CANONICAL_DIR = ".ai-memory/canonical";
-const POINTERS_FILE = join(CANONICAL_DIR, "cache-pointers.json");
-const HASH_FILE = join(CANONICAL_DIR, "codebase-hash.txt");
-const STAGING_DIR = ".ai-memory/staging";
+let canonicalDir = ".ai-memory/canonical";
+let stagingDir = ".ai-memory/staging";
+
+export function configureRefresh(repoId: string): void {
+  canonicalDir = `.ai-memory/${repoId}/canonical`;
+  stagingDir = `.ai-memory/${repoId}/staging`;
+}
+
+export function getStagingDir(): string {
+  return stagingDir;
+}
 
 const execFileAsync = promisify(execFile);
 
@@ -43,9 +50,9 @@ export async function deleteStaleCaches(previousCacheName: string): Promise<numb
 }
 
 export async function promoteStagedFiles(sessionId: string): Promise<void> {
-  const stagingDir = join(STAGING_DIR, sessionId);
-  const stagedCode = join(stagingDir, "generated-code.ts");
-  const stagedTests = join(stagingDir, "generated-tests.test.ts");
+  const sessionStagingDir = join(stagingDir, sessionId);
+  const stagedCode = join(sessionStagingDir, "generated-code.ts");
+  const stagedTests = join(sessionStagingDir, "generated-tests.test.ts");
 
   const [codeContent, testsContent] = await Promise.all([
     readFile(stagedCode, "utf8"),
@@ -65,7 +72,7 @@ export async function refreshCanonicalState(
   sessionId: string,
   geminiCacheName: string,
 ): Promise<CanonicalState> {
-  await mkdir(CANONICAL_DIR, { recursive: true });
+  await mkdir(canonicalDir, { recursive: true });
 
   const existing = await readCanonicalState();
   const codebaseHash = await getCurrentCommitHash();
@@ -82,9 +89,12 @@ export async function refreshCanonicalState(
     },
   };
 
+  const pointersFile = join(canonicalDir, "cache-pointers.json");
+  const hashFile = join(canonicalDir, "codebase-hash.txt");
+
   await atomicWriteAll([
-    { dest: HASH_FILE, data: `${codebaseHash}\n` },
-    { dest: POINTERS_FILE, data: JSON.stringify(state, null, 2) },
+    { dest: hashFile, data: `${codebaseHash}\n` },
+    { dest: pointersFile, data: JSON.stringify(state, null, 2) },
   ]);
 
   return state;
