@@ -49,6 +49,7 @@
       1. Run: npx tsc --noEmit && npx vitest run (smoke verified locally).
       2. Mutate docs/architecture.md (minor edit) and re-run full pipeline (CI/sandbox): expect context-manifest mismatch → cache invalidation log and successful manifest update.
       3. Simulate deleteStaleCaches failure (network block or stub) and re-run: pipeline must raise fatal error; capture logs.
+         - Status: UNIT TEST ADDED and locally verified (see conductor/tracks/initial-implementation/handoff.md). Test commit: 17b47a59a6259ea9aabc3e18cba8253dc6603450.
     - Note: Mark these items DONE only after CI/sandbox logs attached to handoff.md.
 - [ ] **Sandbox Hardening**
     - [ ] Enhance OrbStack/Ubuntu VM isolation.
