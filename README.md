@@ -20,6 +20,23 @@ Each stage uses the best available model for that task:
 
 A session is written to disk at each stage. If any stage returns `ESCALATE`, the pipeline halts and exits with code 2. `FAIL` also halts (except pre-audit, which lets the pipeline continue to VM execution). On full `PASS`, the canonical Gemini context cache is refreshed.
 
+## Agents Overview
+
+- Gemini agent (conductor/gemini.md)
+  - Role: high-level planner and handoff author.
+  - Responsibilities: analyze goals, produce work plans, create explicit handoffs under conductor/tracks/*/handoff.md, and own project scope decisions.
+  - Output: small, reviewable tasks and approval-ready handoffs.
+
+- Claude agent (conductor/claude.md)
+  - Role: implementation executor.
+  - Responsibilities: perform surgical, file-scoped edits from handoff, add or update tests, run existing test suites, and commit changes with the required co-author trailer.
+  - Constraints: only edit files explicitly listed in the handoff; do not modify conductor/** or GEMINI.md unless granted permission.
+
+- Project Orchestrator (project-orchestrator.agent.md)
+  - Role: coordinator and state reporter.
+  - Responsibilities: summarize project state, identify files & open questions, propose next steps and ownership, and prepare handoffs for implementers.
+  - Rules: do not run commands or implement changes unless explicitly requested; keep outputs concise and actionable; always include Objective / Current state / Relevant files / Proposed steps / Risks / Next actions / Handoff.
+
 ## Requirements
 
 - Node.js 20+
