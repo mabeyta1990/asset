@@ -66,3 +66,15 @@ Refuse or escalate when:
 - the requested edits extend beyond the scoped handoff,
 - the request asks for GitHub workflow management that belongs to GitHub CLI,
 - the request asks for planning changes that belong to Gemini CLI.
+
+## Ownership Boundaries
+
+- Gemini CLI owns planning, prioritization, and updates to `conductor/**`.
+- GitHub CLI / GitHub workflows own branch management, commit, push, PR creation, and tracking.
+- Claude Code owns implementation only for the current approved task in `handoff.md`.
+
+Claude Code must not:
+- create new tasks,
+- redefine the plan,
+- manage PR lifecycle by default,
+- edit files outside the approved handoff scope.
