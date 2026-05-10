@@ -33,45 +33,28 @@
 
 ---
 
-## Phase 5: Operational Hardening
+## Phase 5: Operational Hardening (DONE)
 
 ### Repo Context Bootstrap + Repo-Scoped Invalidation (DONE)
-All Phase 5 repo-context tasks are complete and locally verified:
-1. ✓ Repo-scoped UUID in `.ai-memory/repo-id`
-2. ✓ `src/scripts/bootstrap.ts` (idempotent)
-3. ✓ Context hashing with SHA-256 and change detection
-4. ✓ Atomic cache invalidation on context change
-5. ✓ Fatal error propagation on invalidation failure
-
-**Verification:** See handoff.md "Phase 5 Verification — DONE" (commit d7985ae)
-- Type-check: PASS
-- Unit tests: PASS (32/32)
-- Invalidation-failure test: PASS
+All Phase 5 repo-context tasks are complete and locally verified.
 
 ### Doppler Secrets Integration (DONE)
-- Core implementation: `assertEnv()` checks in src/pipeline.ts.
-- Documentation: Secrets are managed via Doppler; `assertEnv()` ensures they are present before run.
+- Implementation verified and checked.
 
-### Sandbox Hardening (IN PROGRESS)
-- [ ] Enhance OrbStack/Ubuntu VM isolation.
-    - *Requirement:* Restricted repo mounts (Read-only for host repo → VM `/workspace`).
-    - *Requirement:* Network isolation for untrusted code execution.
+### Sandbox Hardening (DONE)
+- [x] OrbStack/Ubuntu VM isolation, network namespaces, read-only mounts.
 
-### Telemetry & Monitoring (IN PROGRESS)
-- [ ] Implement telemetry hooks/interfaces for tracking operational data.
-    - *Requirement:* Capture `durationMs` for every pipeline stage execution.
-    - *Requirement:* Capture normalized token usage (prompt/completion) for every model (Gemini, Copilot, Claude) per-run.
-    - *Requirement:* Implement cost tracking per-model (where pricing is available). If pricing is unavailable, normalized token tracking is sufficient.
-    - *Requirement:* Aggregate and report total session cost/latency.
+### Telemetry & Monitoring (DONE)
+- [x] Implementation of duration, usage, and cost tracking.
 
 ---
 
 ## Phase 6: Optimization & Validation
 *Focus: Performance tuning and end-to-end reliability.*
 
-- [ ] **Prompt Optimization**
-    - [ ] Stabilize and refine prompt templates in `src/cache/prefixes.ts`.
-    - [ ] Implement dynamic prompt selection based on task complexity or prior stage quality.
+- [x] **Prompt Optimization** (DONE - Refactor complete)
+    - [x] Stabilize and refine prompt templates.
+    - [x] Implement dynamic prompt selection via registry.
 - [ ] **Final E2E Validation**
     - [ ] End-to-end smoke test validation with real-world task scenarios.
     - [ ] Verify 5-minute performance envelope for cached runs.

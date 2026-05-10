@@ -10,6 +10,7 @@ import { callResearch } from "./wrappers/research.js";
 import { callGemini } from "./wrappers/gemini.js";
 import { callClaude } from "./wrappers/claude.js";
 import { callNemotron } from "./wrappers/nemotron.js";
+import { buildResearchConfig, buildPlanConfig, buildCodeConfig, buildTestsConfig, buildAuditPreConfig, buildAuditPostConfig } from "./prompts/registry.js";
 
 const GEMINI_CACHE_NAME = "asset-canonical-context";
 const MAX_RETRIES_CODE_GENERATION = 3;
@@ -364,7 +365,7 @@ export async function runPipeline(spec: string): Promise<void> {
 
   // Stage 0: Research (Tavily)
   const research = await withTiming(() => callResearch(
-    { systemPrompt: "", stableContext: "", variableTask: spec },
+    buildResearchConfig(spec),
     "research",
     1,
   ));
@@ -376,12 +377,7 @@ export async function runPipeline(spec: string): Promise<void> {
   state = reducer(state, { type: "RESEARCH_COMPLETE", output: research });
 
   // Stage 1: Plan (Gemini 2.5 Pro)
-  const planConfig: PromptConfig = {
-    systemPrompt:
-      "You are the Strategy stage of the ASSET pipeline. Produce a numbered implementation plan with explicit, testable acceptance criteria. Respond with the plan only.",
-    stableContext: research.content,
-    variableTask: `Create an implementation plan for:\n\n${spec}`,
-  };
+  const planConfig = buildPlanConfig(research.content, spec);
   const plan = await withTiming(() => callGemini(planConfig, "plan", 1, { displayName: GEMINI_CACHE_NAME }));
   await writeStage(sessionId, 1, "plan", plan);
   if (plan.status !== "PASS") {
@@ -391,12 +387,7 @@ export async function runPipeline(spec: string): Promise<void> {
   state = reducer(state, { type: "PLAN_READY", output: plan });
 
   // Base code config (reused across vitest retries)
-  const codeConfig: PromptConfig = {
-    systemPrompt:
-      "You are the Scripting stage of the ASSET pipeline. Produce clean, idiomatic TypeScript that satisfies the plan. Respond with only the TypeScript source — no preamble, no markdown fences. Output ONLY the function implementation. No test runner, no runTests(), no TestCase interface, no console.log. Just the exported function. Do not include JSDoc usage examples with asterisks at the end of the file. Only output the function implementation.",
-    stableContext: plan.content,
-    variableTask: `Implement the following specification:\n\n${spec}`,
-  };
+  const codeConfig = buildCodeConfig(plan.content, spec);
 
   // Outer retry loop: Stages 2-5 repeat on vitest failure
   let testRetryCount = 0;
@@ -429,12 +420,7 @@ export async function runPipeline(spec: string): Promise<void> {
     state = reducer(state, { type: "CODE_READY", output: code });
 
     // Stage 3: Tests (GLM)
-    const testsConfig: PromptConfig = {
-      systemPrompt:
-        "You are the Testing stage of the ASSET pipeline. Write comprehensive tests for the provided implementation. Respond with only the test source — no preamble, no markdown fences. Output ONLY vitest tests using describe, it, and expect. Import the function from ./generated-code. Do not write a custom test runner, do not use console.log, do not define a runTests function. For debounce timer tests: after the final debounced call, always advance fake timers by the full delay amount before asserting. For example, if delay is 100ms, the final vi.advanceTimersByTime() must be at least 100, not 50.",
-      stableContext: cleanCode,
-      variableTask: `Write tests for the following specification:\n\n${spec}`,
-    };
+    const testsConfig = buildTestsConfig(cleanCode, spec);
     const tests = await withTiming(() => callClaude(testsConfig, "tests", 1));
     await writeStage(sessionId, 3, "tests", tests);
     const fixedTests = tests.content.replace(/from ['"]\.\/\w+['"]/g, 'from "./generated-code"');
@@ -464,11 +450,7 @@ export async function runPipeline(spec: string): Promise<void> {
     state = reducer(state, { type: "TESTS_READY", output: tests });
 
     // Stage 4: Pre-audit (Nemotron) — systemPrompt overridden internally by mode
-    const preAuditConfig: PromptConfig = {
-      systemPrompt: "Only return ESCALATE if the code has a security vulnerability or is fundamentally broken. Return PASS for any working implementation, even if it lacks optional features. Do not invent requirements not stated in the spec.",
-      stableContext: `SPEC:\n${spec}\n\nCODE:\n${code.content}\n\nTESTS:\n${fixedTests}`,
-      variableTask: "Audit the code and tests against the specification above.",
-    };
+    const preAuditConfig = buildAuditPreConfig(spec, code.content, fixedTests);
     const preAudit = await withTiming(() => callNemotron(preAuditConfig, "pre", "audit-pre", 1));
     await writeStage(sessionId, 4, "audit-pre", preAudit);
     if (preAudit.status === "ESCALATE") {
@@ -499,11 +481,7 @@ export async function runPipeline(spec: string): Promise<void> {
   }
 
   // Stage 6: Post-audit (Nemotron) — systemPrompt overridden internally by mode
-  const postAuditConfig: PromptConfig = {
-    systemPrompt: "If all tests passed in the execution output, return PASS. Only return ESCALATE if tests failed or the implementation is clearly wrong. Do not ESCALATE just because you cannot see the source code directly.",
-    stableContext: `SPEC:\n${spec}\n\nEXECUTION RESULTS:\n${vmOutput.content}`,
-    variableTask: "Audit the execution results against the specification above.",
-  };
+  const postAuditConfig = buildAuditPostConfig(spec, vmOutput.content);
   const postAudit = await withTiming(() => callNemotron(postAuditConfig, "post", "audit-post", 1));
   await writeStage(sessionId, 6, "audit-post", postAudit);
 

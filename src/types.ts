@@ -48,6 +48,8 @@ export interface PromptConfig {
   variableTask: string;
 }
 
+export type PromptTemplateName = "research" | "plan" | "code" | "tests" | "auditPre" | "auditPost";
+
 export interface RetryContext {
   attempt: number;
   maxAttempts: number;
