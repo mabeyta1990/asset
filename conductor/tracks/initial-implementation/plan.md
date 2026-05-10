@@ -26,15 +26,22 @@ Status of the initial pipeline implementation roadmap for the ASSET project.
 - [x] **Final E2E Validation:** End-to-end smoke test validation and performance envelope verification.
 - [x] **Claude Prompt Caching:** Fixed Haiku 4.5 caching by meeting 4096-token minimum floor in stable blocks.
 - [x] **Per-Stage Model Selection (DONE)**
-    - [x] Add `models` object to `TaskSpec` in `src/types.ts`.
-    - [x] Define supported stage keys: `research`, `plan`, `code`, `audit` (TaskStageKey type).
-    - [x] Validate model names against known providers (Claude, Gemini, GLM, Nemotron, Tavily).
-    - [x] Implement per-stage model override resolution in `runPipeline` within `src/pipeline.ts`.
-    - [x] Preserve current defaults when no override is provided (DEFAULT_MODELS).
-    - [x] Persist chosen model per stage in session JSON (SessionState.modelSelection).
-    - [x] Full dispatch logic implemented in all wrapper functions.
-    - [x] CLI support for JSON TaskSpec files and per-stage model flags.
-    - [x] Unit tests for model validation and fallback behavior (16 new tests).
+- [x] **Model Dispatch & CLI Integration (DONE)**
+
+- [x] **Comprehensive Telemetry (DONE)**
+    - [x] **Category 1: Token Usage (Input/Output)**
+        - [x] Ensure all stages report `input_tokens` and `output_tokens`.
+        - [x] Update `logSessionSummary` to show aggregate input/output tokens across all stages.
+        - [x] Distinguish between per-stage tokens and session-total tokens.
+    - [x] **Category 2: Cache Performance (Claude)**
+        - [x] Verify `callClaude` correctly extracts `cache_creation_input_tokens` and `cache_read_input_tokens`.
+        - [x] Update `logSessionSummary` to report total "Cache Investment" (creation) vs "Cache Savings" (reads).
+        - [x] Add unit tests for cache telemetry parsing.
+    - [x] **Category 3: Retry Loop Counts**
+        - [x] Extend `Telemetry` or session state to track `tscRetryCount` and `vitestRetryCount` distinctly.
+        - [x] Record retry depth per stage.
+        - [x] Update `logSessionSummary` to report total retries as a distinct metric category.
+        - [x] Add tests for retry tracking across mixed failures.
 
 - [ ] **Multi-File Generation (Next Priority)**
     - [ ] Extend task spec to declare multiple output files.
@@ -55,13 +62,13 @@ Status of the initial pipeline implementation roadmap for the ASSET project.
     - [ ] Fail fast on ambiguous or missing matches.
     - [ ] Add unit tests for patch apply success, zero-match failure, and multi-match failure.
 
-- [ ] **Retry Loop Telemetry**
-    - [ ] Extend `Telemetry` to record `tscRetryCount`.
-    - [ ] Extend `Telemetry` to record `vitestRetryCount`.
-    - [ ] Record retry depth per code-generation attempt.
-    - [ ] Include retry totals in `logSessionSummary`.
-    - [ ] Persist retry metadata in session JSON.
-    - [ ] Add tests for retry counting across mixed `tsc` and `vitest` failures.
+- [x] **Retry Loop Telemetry (DONE)**
+    - [x] Extend `Telemetry` to record `tscRetryCount`.
+    - [x] Extend `Telemetry` to record `vitestRetryCount`.
+    - [x] Record retry depth per code-generation attempt.
+    - [x] Include retry totals in `logSessionSummary`.
+    - [x] Persist retry metadata in session JSON.
+    - [x] Add tests for retry counting across mixed `tsc` and `vitest` failures.
 
 - [ ] **Repo File Insertion**
     - [ ] Add optional `insertPath` field to task spec.

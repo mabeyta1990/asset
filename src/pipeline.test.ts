@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { withTiming, isClaudeUsage, logSessionSummary, resolveModel, isValidModel } from "./pipeline.js";
-import type { StageOutput, ClaudeUsage } from "./types.js";
+import { withTiming, isClaudeUsage, isNemotronUsage, logSessionSummary, resolveModel, isValidModel } from "./pipeline.js";
+import { getClaudePricing, calculateClaudeCost, calculateNemotronCost, calculateTavilyCost } from "./pricing/registry.js";
+import type { StageOutput, ClaudeUsage, NemotronUsage } from "./types.js";
 
 // ---------------------------------------------------------------------------
 // withTiming
@@ -80,6 +81,38 @@ describe("isClaudeUsage", () => {
 });
 
 // ---------------------------------------------------------------------------
+// isNemotronUsage
+// ---------------------------------------------------------------------------
+describe("isNemotronUsage", () => {
+  it("returns true for a NemotronUsage-shaped object", () => {
+    const u: NemotronUsage = {
+      prompt_tokens: 100,
+      completion_tokens: 50,
+      total_tokens: 150,
+    };
+    expect(isNemotronUsage(u)).toBe(true);
+  });
+
+  it("returns false for ClaudeUsage", () => {
+    const u: ClaudeUsage = {
+      input_tokens: 10,
+      output_tokens: 5,
+      cache_creation_input_tokens: 0,
+      cache_read_input_tokens: 0,
+    };
+    expect(isNemotronUsage(u)).toBe(false);
+  });
+
+  it("returns false for a generic Record", () => {
+    expect(isNemotronUsage({ results: 3 })).toBe(false);
+  });
+
+  it("returns false for null", () => {
+    expect(isNemotronUsage(null)).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // logSessionSummary
 // ---------------------------------------------------------------------------
 describe("logSessionSummary", () => {
@@ -87,13 +120,15 @@ describe("logSessionSummary", () => {
   afterEach(() => { vi.restoreAllMocks(); });
 
   it("logs a line tagged with the session ID", () => {
-    logSessionSummary("test-session-abc", performance.now(), []);
+    const modelSelection = { research: "tavily-search", plan: "nemotron-plan", code: "claude-haiku-4-5", audit: "nemotron-audit" };
+    logSessionSummary("test-session-abc", performance.now(), [], modelSelection, 0, 0);
     expect(console.log).toHaveBeenCalledWith(
       expect.stringContaining("[session:test-session-abc]"),
     );
   });
 
   it("aggregates input and output tokens from Claude-format stages", () => {
+    const modelSelection = { research: "tavily-search", plan: "nemotron-plan", code: "claude-haiku-4-5", audit: "nemotron-audit" };
     const stages: StageOutput[] = [
       makeStage({
         usage: { input_tokens: 1000, output_tokens: 200, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 },
@@ -101,23 +136,25 @@ describe("logSessionSummary", () => {
       makeStage({
         usage: { input_tokens: 500, output_tokens: 100, cache_creation_input_tokens: 50, cache_read_input_tokens: 25 },
       }),
-      makeStage({ usage: { results: 5 } }), // non-Claude usage should be skipped
+      makeStage({ usage: { results: 5 } }), // Tavily request count
     ];
-    logSessionSummary("s1", performance.now(), stages);
+    logSessionSummary("s1", performance.now(), stages, modelSelection, 0, 0);
     const logged = (console.log as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
-    expect(logged).toContain("in=1500");
-    expect(logged).toContain("out=300");
-    expect(logged).toContain("cache_read=25");
-    expect(logged).toContain("cache_write=50");
+    expect(logged).toContain("claude_in=1500");
+    expect(logged).toContain("claude_out=300");
+    expect(logged).toContain("tavily_req=5");
+    expect(logged).toContain("savings=25");
+    expect(logged).toContain("investment=50");
   });
 
   it("computes a non-negative estimated cost", () => {
+    const modelSelection = { research: "tavily-search", plan: "nemotron-plan", code: "claude-haiku-4-5", audit: "nemotron-audit" };
     const stages: StageOutput[] = [
       makeStage({
         usage: { input_tokens: 1000, output_tokens: 200, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 },
       }),
     ];
-    logSessionSummary("s2", performance.now(), stages);
+    logSessionSummary("s2", performance.now(), stages, modelSelection, 0, 0);
     const logged = (console.log as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
     const match = logged.match(/est_cost=\$(\d+\.\d+)/);
     expect(match).not.toBeNull();
@@ -125,10 +162,170 @@ describe("logSessionSummary", () => {
   });
 
   it("skips stages with non-Claude usage when calculating cost", () => {
+    const modelSelection = { research: "tavily-search", plan: "nemotron-plan", code: "claude-haiku-4-5", audit: "nemotron-audit" };
     const stages: StageOutput[] = [makeStage({ usage: {} })];
-    logSessionSummary("s3", performance.now(), stages);
+    logSessionSummary("s3", performance.now(), stages, modelSelection, 0, 0);
     const logged = (console.log as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
     expect(logged).toContain("est_cost=$0.0000");
+  });
+
+  it("calculates and displays cache efficiency percentage", () => {
+    const modelSelection = { research: "tavily-search", plan: "nemotron-plan", code: "claude-haiku-4-5", audit: "nemotron-audit" };
+    const stages: StageOutput[] = [
+      makeStage({
+        usage: {
+          input_tokens: 1000,
+          output_tokens: 200,
+          cache_creation_input_tokens: 4000,
+          cache_read_input_tokens: 12000,
+        },
+      }),
+    ];
+    logSessionSummary("s4", performance.now(), stages, modelSelection, 0, 0);
+    const logged = (console.log as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
+    expect(logged).toContain("investment=4000");
+    expect(logged).toContain("savings=12000");
+    expect(logged).toContain("efficiency=75.0%");
+  });
+
+  it("omits cache metrics entirely when investment and savings are both zero", () => {
+    const modelSelection = { research: "tavily-search", plan: "nemotron-plan", code: "claude-haiku-4-5", audit: "nemotron-audit" };
+    const stages: StageOutput[] = [
+      makeStage({
+        usage: {
+          input_tokens: 1000,
+          output_tokens: 200,
+          cache_creation_input_tokens: 0,
+          cache_read_input_tokens: 0,
+        },
+      }),
+    ];
+    logSessionSummary("s5", performance.now(), stages, modelSelection, 0, 0);
+    const logged = (console.log as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
+    expect(logged).not.toContain("cache(");
+    expect(logged).toContain("claude_in=1000");
+  });
+
+  it("displays cache metrics with efficiency when cache data exists", () => {
+    const modelSelection = { research: "tavily-search", plan: "nemotron-plan", code: "claude-haiku-4-5", audit: "nemotron-audit" };
+    const stages: StageOutput[] = [
+      makeStage({
+        usage: {
+          input_tokens: 1000,
+          output_tokens: 200,
+          cache_creation_input_tokens: 500,
+          cache_read_input_tokens: 1500,
+        },
+      }),
+    ];
+    logSessionSummary("s5b", performance.now(), stages, modelSelection, 0, 0);
+    const logged = (console.log as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
+    expect(logged).toContain("cache(");
+    expect(logged).toContain("investment=500");
+    expect(logged).toContain("savings=1500");
+    expect(logged).toContain("efficiency=75.0%");
+  });
+
+  it("includes retry metrics in the logged output", () => {
+    const modelSelection = { research: "tavily-search", plan: "nemotron-plan", code: "claude-haiku-4-5", audit: "nemotron-audit" };
+    const stages: StageOutput[] = [makeStage({ usage: {} })];
+    logSessionSummary("s6", performance.now(), stages, modelSelection, 2, 1);
+    const logged = (console.log as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
+    expect(logged).toContain("tsc=2");
+    expect(logged).toContain("vitest=1");
+  });
+
+  it("defaults to zero retries when not specified", () => {
+    const modelSelection = { research: "tavily-search", plan: "nemotron-plan", code: "claude-haiku-4-5", audit: "nemotron-audit" };
+    const stages: StageOutput[] = [makeStage({ usage: {} })];
+    logSessionSummary("s7", performance.now(), stages, modelSelection);
+    const logged = (console.log as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
+    expect(logged).toContain("tsc=0");
+    expect(logged).toContain("vitest=0");
+  });
+
+  it("aggregates Nemotron tokens from stages", () => {
+    const modelSelection = { research: "tavily-search", plan: "nemotron-plan", code: "claude-haiku-4-5", audit: "nemotron-audit" };
+    const stages: StageOutput[] = [
+      makeStage({
+        usage: { prompt_tokens: 2000, completion_tokens: 500, total_tokens: 2500 },
+      }),
+      makeStage({
+        usage: { prompt_tokens: 1000, completion_tokens: 250, total_tokens: 1250 },
+      }),
+    ];
+    logSessionSummary("s8", performance.now(), stages, modelSelection, 0, 0);
+    const logged = (console.log as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
+    expect(logged).toContain("nemotron_in=3000");
+    expect(logged).toContain("nemotron_out=750");
+  });
+
+  it("tracks multiple model types in single session", () => {
+    const modelSelection = { research: "tavily-search", plan: "nemotron-plan", code: "claude-haiku-4-5", audit: "nemotron-audit" };
+    const stages: StageOutput[] = [
+      makeStage({
+        usage: { input_tokens: 1000, output_tokens: 200, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 },
+      }),
+      makeStage({
+        usage: { prompt_tokens: 2000, completion_tokens: 500, total_tokens: 2500 },
+      }),
+      makeStage({ usage: { results: 3 } }),
+    ];
+    logSessionSummary("s9", performance.now(), stages, modelSelection, 0, 0);
+    const logged = (console.log as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
+    expect(logged).toContain("claude_in=1000");
+    expect(logged).toContain("claude_out=200");
+    expect(logged).toContain("nemotron_in=2000");
+    expect(logged).toContain("nemotron_out=500");
+    expect(logged).toContain("tavily_req=3");
+  });
+
+  it("omits cache metrics when not present", () => {
+    const modelSelection = { research: "tavily-search", plan: "nemotron-plan", code: "claude-haiku-4-5", audit: "nemotron-audit" };
+    const stages: StageOutput[] = [
+      makeStage({
+        usage: { input_tokens: 100, output_tokens: 50, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 },
+      }),
+    ];
+    logSessionSummary("s10", performance.now(), stages, modelSelection, 0, 0);
+    const logged = (console.log as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
+    expect(logged).not.toContain("cache(");
+  });
+
+  it("calculates accurate Claude cost using pricing registry", () => {
+    const modelSelection = { research: "tavily-search", plan: "nemotron-plan", code: "claude-haiku-4-5", audit: "nemotron-audit" };
+    const stages: StageOutput[] = [
+      makeStage({
+        usage: { input_tokens: 1000, output_tokens: 500, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 },
+      }),
+    ];
+    logSessionSummary("s11", performance.now(), stages, modelSelection, 0, 0);
+    const logged = (console.log as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
+    expect(logged).toContain("est_cost=$");
+    const match = logged.match(/est_cost=\$(\d+\.\d+)/);
+    expect(match).not.toBeNull();
+    const cost = parseFloat(match![1]);
+    expect(cost).toBeGreaterThan(0);
+    expect(cost).toBeLessThan(0.01);
+  });
+
+  it("combines Claude, Nemotron, and Tavily costs", () => {
+    const modelSelection = { research: "tavily-search", plan: "nemotron-plan", code: "claude-opus-4-7", audit: "nemotron-audit" };
+    const stages: StageOutput[] = [
+      makeStage({
+        usage: { input_tokens: 10000, output_tokens: 5000, cache_creation_input_tokens: 2000, cache_read_input_tokens: 4000 },
+      }),
+      makeStage({
+        usage: { prompt_tokens: 5000, completion_tokens: 2000, total_tokens: 7000 },
+      }),
+      makeStage({ usage: { results: 10 } }),
+    ];
+    logSessionSummary("s12", performance.now(), stages, modelSelection, 0, 0);
+    const logged = (console.log as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
+    expect(logged).toContain("claude_in=10000");
+    expect(logged).toContain("nemotron_in=5000");
+    expect(logged).toContain("tavily_req=10");
+    expect(logged).toContain("est_cost=$");
   });
 });
 
@@ -243,6 +440,66 @@ describe("isValidModel", () => {
 
   it("returns false for empty string", () => {
     expect(isValidModel("")).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Pricing Registry
+// ---------------------------------------------------------------------------
+describe("Pricing Registry", () => {
+  it("returns correct Claude Haiku 4.5 pricing", () => {
+    const pricing = getClaudePricing("claude-haiku-4-5");
+    expect(pricing.baseInput).toBe(1);
+    expect(pricing.output).toBe(5);
+    expect(pricing.cacheWrite).toBe(1.25);
+    expect(pricing.cacheHit).toBe(0.1);
+  });
+
+  it("returns correct Claude Opus 4.7 pricing", () => {
+    const pricing = getClaudePricing("claude-opus-4-7");
+    expect(pricing.baseInput).toBe(5);
+    expect(pricing.output).toBe(25);
+    expect(pricing.cacheWrite).toBe(6.25);
+    expect(pricing.cacheHit).toBe(0.5);
+  });
+
+  it("defaults to Haiku pricing for unknown models", () => {
+    const pricing = getClaudePricing("unknown-model");
+    expect(pricing.baseInput).toBe(1);
+    expect(pricing.output).toBe(5);
+  });
+
+  it("calculates Claude cost correctly", () => {
+    const cost = calculateClaudeCost("claude-haiku-4-5", {
+      input: 1000,
+      output: 500,
+      cacheWrite: 0,
+      cacheHit: 0,
+    });
+    const expected = (1000 * 1 + 500 * 5) / 1_000_000;
+    expect(cost).toBeCloseTo(expected, 6);
+  });
+
+  it("includes cache costs in Claude calculation", () => {
+    const cost = calculateClaudeCost("claude-haiku-4-5", {
+      input: 0,
+      output: 0,
+      cacheWrite: 1000,
+      cacheHit: 2000,
+    });
+    const expected = (1000 * 1.25 + 2000 * 0.1) / 1_000_000;
+    expect(cost).toBeCloseTo(expected, 6);
+  });
+
+  it("calculates Nemotron cost correctly", () => {
+    const cost = calculateNemotronCost(1000, 500);
+    const expected = (1000 * 0.2 + 500 * 0.8) / 1_000_000;
+    expect(cost).toBeCloseTo(expected, 6);
+  });
+
+  it("calculates Tavily cost based on request count", () => {
+    const cost = calculateTavilyCost(5);
+    expect(cost).toBe(5 * 0.008);
   });
 });
 

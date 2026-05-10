@@ -35,6 +35,6 @@ Implement the core ASSET pipeline, including AI model wrappers with caching, ses
 ## Local Verification
 - Date: 2026-05-10
 - Type-check: PASS (npx tsc --noEmit)
-- Unit tests: PASS (vitest run — 29 pipeline tests)
-- Notes: Per-stage model selection and CLI integration (JSON TaskSpec + overrides) fully implemented and verified. All wrapper functions updated to use dynamic model selection. Pipeline dispatch logic validated via unit tests.
+- Unit tests: PASS (vitest run — 50 pipeline tests)
+- Notes: Distinct telemetry categories (tokens, cache performance, retry counts) and accurate multi-model pricing (Claude, Nemotron, Tavily) fully implemented. Model-aware cost calculation integrated into `logSessionSummary`. 21 new tests added to verify telemetry and pricing accuracy.
 

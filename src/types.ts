@@ -17,20 +17,30 @@ export interface ClaudeUsage {
   cache_read_input_tokens: number;
 }
 
+export interface NemotronUsage {
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
+}
+
+export type ModelUsage = ClaudeUsage | NemotronUsage | Record<string, number>;
+
 export interface Telemetry {
   durationMs: number;
-  usage: ClaudeUsage | Record<string, number>;
+  usage: ModelUsage;
 }
 
 export interface StageOutput {
   stage: StageName;
   status: StageVerdict;
   content: string;
-  usage?: ClaudeUsage | Record<string, number>;
+  usage?: ModelUsage;
   timestamp: string;
   attempt: number;
   feedback?: string;
   telemetry?: Telemetry;
+  tscRetryCount?: number;
+  vitestRetryCount?: number;
 }
 
 export interface SessionState {

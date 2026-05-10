@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join, dirname, basename } from "node:path";
-import type { ClaudeUsage, PromptConfig, StageName, StageOutput, StageVerdict, PipelineState, PipelineEvent, TaskSpec, TaskStageKey, ModelProvider } from "./types.js";
+import type { ClaudeUsage, NemotronUsage, ModelUsage, PromptConfig, StageName, StageOutput, StageVerdict, PipelineState, PipelineEvent, TaskSpec, TaskStageKey, ModelProvider } from "./types.js";
 import { configureMemory, initSession, writeStage, finalizeSession } from "./memory.js";
 import { configureRefresh, getStagingDir, promoteStagedFiles, refreshCanonicalState, deleteStaleCaches } from "./cache/refresh.js";
 import { configureCanonical, readCanonicalState } from "./cache/canonical.js";
@@ -11,6 +11,7 @@ import { callGemini } from "./wrappers/gemini.js";
 import { callClaude } from "./wrappers/claude.js";
 import { callNemotron, callNemotronPlan } from "./wrappers/nemotron.js";
 import { buildResearchConfig, buildPlanConfig, buildCodeConfig, buildTestsConfig, buildAuditPreConfig, buildAuditPostConfig } from "./prompts/registry.js";
+import { getClaudePricing, calculateClaudeCost, calculateNemotronCost, calculateTavilyCost } from "./pricing/registry.js";
 
 const GEMINI_CACHE_NAME = "asset-canonical-context";
 const MAX_RETRIES_CODE_GENERATION = 3;
@@ -74,24 +75,76 @@ export function isClaudeUsage(u: unknown): u is ClaudeUsage {
   return typeof u === "object" && u !== null && "input_tokens" in u;
 }
 
-export function logSessionSummary(sessionId: string, startMs: number, stages: StageOutput[]): void {
+export function isNemotronUsage(u: unknown): u is NemotronUsage {
+  return typeof u === "object" && u !== null && "prompt_tokens" in u && "completion_tokens" in u;
+}
+
+export function logSessionSummary(
+  sessionId: string,
+  startMs: number,
+  stages: StageOutput[],
+  modelSelection: Record<TaskStageKey, string>,
+  tscRetryCount = 0,
+  vitestRetryCount = 0,
+): void {
   const totalDurationMs = Math.round(performance.now() - startMs);
-  let inputTokens = 0, outputTokens = 0, cacheReadTokens = 0, cacheWriteTokens = 0;
+  let claudeInput = 0, claudeOutput = 0, cacheReadTokens = 0, cacheWriteTokens = 0;
+  let nemotronPromptTokens = 0, nemotronCompletionTokens = 0;
+  let tavilyRequests = 0;
+
   for (const stage of stages) {
     const u = stage.usage;
     if (isClaudeUsage(u)) {
-      inputTokens += u.input_tokens;
-      outputTokens += u.output_tokens;
+      claudeInput += u.input_tokens;
+      claudeOutput += u.output_tokens;
       cacheReadTokens += u.cache_read_input_tokens;
       cacheWriteTokens += u.cache_creation_input_tokens;
+    } else if (isNemotronUsage(u)) {
+      nemotronPromptTokens += u.prompt_tokens;
+      nemotronCompletionTokens += u.completion_tokens;
+    } else if (typeof u === "object" && u !== null && "results" in u) {
+      tavilyRequests += typeof u.results === "number" ? u.results : 0;
     }
   }
-  // Pricing: Claude Opus 4.7 per 1M tokens — input $15, output $75, cache_read $1.50, cache_write $18.75
-  const estimatedCostUsd = (
-    (inputTokens * 15 + cacheReadTokens * 1.5 + cacheWriteTokens * 18.75 + outputTokens * 75) / 1_000_000
-  ).toFixed(4);
+
+  // Build tokens display
+  const tokenParts: string[] = [];
+  if (claudeInput > 0 || claudeOutput > 0) {
+    tokenParts.push(`claude_in=${claudeInput} claude_out=${claudeOutput}`);
+  }
+  if (nemotronPromptTokens > 0 || nemotronCompletionTokens > 0) {
+    tokenParts.push(`nemotron_in=${nemotronPromptTokens} nemotron_out=${nemotronCompletionTokens}`);
+  }
+  if (tavilyRequests > 0) {
+    tokenParts.push(`tavily_req=${tavilyRequests}`);
+  }
+  const tokensDisplay = tokenParts.length > 0 ? tokenParts.join(" ") : "tokens=0";
+
+  // Calculate accurate costs using pricing registry
+  const claudeModel = modelSelection.code;
+  const claudePricing = getClaudePricing(claudeModel);
+  const claudeCost = calculateClaudeCost(claudeModel, {
+    input: claudeInput,
+    output: claudeOutput,
+    cacheWrite: cacheWriteTokens,
+    cacheHit: cacheReadTokens,
+  });
+  const nemotronCost = calculateNemotronCost(nemotronPromptTokens, nemotronCompletionTokens);
+  const tavilyCost = calculateTavilyCost(tavilyRequests);
+  const totalCostUsd = (claudeCost + nemotronCost + tavilyCost).toFixed(4);
+
+  // Cache efficiency (Claude only)
+  const cacheEfficiencyPct = cacheReadTokens + cacheWriteTokens > 0
+    ? ((cacheReadTokens / (cacheReadTokens + cacheWriteTokens)) * 100).toFixed(1)
+    : "0.0";
+
+  const cacheDisplay = cacheWriteTokens > 0 || cacheReadTokens > 0
+    ? `cache(investment=${cacheWriteTokens} savings=${cacheReadTokens} efficiency=${cacheEfficiencyPct}%) `
+    : "";
+
   console.log(
-    `[session:${sessionId}] total=${totalDurationMs}ms tokens(in=${inputTokens} out=${outputTokens} cache_read=${cacheReadTokens} cache_write=${cacheWriteTokens}) est_cost=$${estimatedCostUsd}`,
+    `[session:${sessionId}] total=${totalDurationMs}ms tokens(${tokensDisplay}) ` +
+    `${cacheDisplay}retries(tsc=${tscRetryCount} vitest=${vitestRetryCount}) est_cost=$${totalCostUsd}`,
   );
 }
 
@@ -183,8 +236,9 @@ async function refineCodeUntilTypeSafe(
   dispatchFeedback: (event: PipelineEvent) => void,
   priorCode?: string,
   priorTestFeedback?: string,
-): Promise<{ codeOutput: StageOutput; cleanCode: string; typeCheckOutput: StageOutput }> {
+): Promise<{ codeOutput: StageOutput; cleanCode: string; typeCheckOutput: StageOutput; tscRetryCount: number }> {
   let attempt = 0;
+  let tscRetryCount = 0;
   let latestCode = priorCode ?? "";
   let latestTscFeedback = "";
   let pendingTestFeedback = priorTestFeedback;
@@ -220,10 +274,11 @@ async function refineCodeUntilTypeSafe(
     const typeCheckOutput = await runTypeCheck(stagingDir);
 
     if (typeCheckOutput.status === "PASS") {
-      return { codeOutput, cleanCode, typeCheckOutput };
+      return { codeOutput, cleanCode, typeCheckOutput, tscRetryCount };
     }
 
     attempt++;
+    tscRetryCount++;
     latestCode = cleanCode;
     latestTscFeedback = parseTscDiagnostics(typeCheckOutput.content);
     pendingTestFeedback = undefined;
@@ -433,14 +488,15 @@ export async function runPipeline(taskOrSpec: string | TaskSpec): Promise<void> 
   const codeConfig = buildCodeConfig(plan.content, spec);
 
   // Outer retry loop: Stages 2-5 repeat on vitest failure
-  let testRetryCount = 0;
+  let vitestRetryCount = 0;
+  let tscRetryCount = 0;
   let priorCleanCode: string | undefined;
   let latestTestFeedback: string | undefined;
   let vmOutput!: StageOutput;
 
   while (true) {
     // Stage 2: Code (Claude Opus 4.7 with tsc feedback-threaded retry)
-    const { codeOutput: code, cleanCode } = await refineCodeUntilTypeSafe(
+    const { codeOutput: code, cleanCode, tscRetryCount: stageTscRetryCount } = await refineCodeUntilTypeSafe(
       codeConfig,
       spec,
       sessionId,
@@ -461,6 +517,7 @@ export async function runPipeline(taskOrSpec: string | TaskSpec): Promise<void> 
       state = reducer(state, { type: "FAILURE", failedStage: "code", error: msg });
       return await terminate(sessionId, "FAIL", "code", failOutput);
     });
+    tscRetryCount = stageTscRetryCount;
     state = reducer(state, { type: "CODE_READY", output: code });
 
     // Stage 3: Tests (GLM)
@@ -512,8 +569,8 @@ export async function runPipeline(taskOrSpec: string | TaskSpec): Promise<void> 
       break;
     }
 
-    testRetryCount++;
-    if (testRetryCount >= MAX_RETRIES_TEST_FAILURE) {
+    vitestRetryCount++;
+    if (vitestRetryCount >= MAX_RETRIES_TEST_FAILURE) {
       state = reducer(state, { type: "FAILURE", failedStage: "execution", error: vmOutput.content });
       await terminate(sessionId, vmOutput.status, "execution", vmOutput);
     }
@@ -532,7 +589,7 @@ export async function runPipeline(taskOrSpec: string | TaskSpec): Promise<void> 
   if (postAudit.status === "PASS") {
     state = reducer(state, { type: "AUDIT_POST_PASS", output: postAudit });
     const allStages = Object.values(collectOutputs(state)).filter((s): s is StageOutput => s !== undefined);
-    logSessionSummary(sessionId, pipelineStart, allStages);
+    logSessionSummary(sessionId, pipelineStart, allStages, modelSelection, tscRetryCount, vitestRetryCount);
     await promoteStagedFiles(sessionId);
     await refreshCanonicalState(sessionId, GEMINI_CACHE_NAME);
     await finalizeSession(sessionId, { verdict: "PASS", summary: postAudit.content.slice(0, 500) });
