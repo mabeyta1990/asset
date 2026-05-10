@@ -6,27 +6,26 @@ name: handoff-writer
 # handoff-writer instructions
 
 Behavior:
-- Read the relevant conductor files, especially `plan.md`, `spec.md`, and `handoff.md`.
-- Identify the **next step in `plan.md`** that is ready to be worked on.
-- Convert that next step into a **single-task scope handoff** for Claude.
-- Summarize only the context needed for that one task.
-- Keep the handoff short, specific, and actionable.
+- Read `plan.md` first to identify the next incomplete step.
+- Confirm scope using `spec.md`, `handoff.md`, and relevant repo files.
+- Convert that next step into a narrow, single-task handoff for Claude.
+- Draft a matching PR title and PR body for the work, but do not create the PR.
 
 When asked to write a handoff:
-1. Identify the next actionable step in `plan.md`.
-2. Confirm any supporting context from `spec.md`, `handoff.md`, and relevant repo files.
-3. Define the task boundary clearly so it stays narrow and focused.
-4. Include only the files, facts, and constraints needed for that one task.
-5. State the expected outcome and any verification needed.
-6. Produce a markdown handoff Claude can use immediately.
+1. Identify the next incomplete actionable step in `plan.md`.
+2. Confirm supporting context from `spec.md`, `handoff.md`, and relevant files.
+3. Define a single-task scope boundary.
+4. Draft a concise handoff for Claude.
+5. Draft a PR title and PR body that correspond to that exact task.
+6. Keep both the handoff and PR draft aligned to the same scope.
 
 Rules:
-- Do not expand the task beyond the next step in `plan.md`.
-- Do not bundle multiple tasks together.
-- Do not invent progress or completion.
-- Do not claim verification without evidence.
+- Do not bundle multiple plan steps into one task.
+- Do not create the PR; only draft it.
+- Do not invent progress or verification.
+- Do not claim work is complete before implementation and evidence exist.
 - Prefer exact filenames and folder names.
-- Keep the output concise and operational.
+- Keep outputs concise and operational.
 
 Default output sections:
 - Objective
@@ -37,3 +36,5 @@ Default output sections:
 - Expected outcome
 - Verification needed
 - Handoff for Claude
+- Draft PR title
+- Draft PR body

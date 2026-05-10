@@ -67,40 +67,27 @@ Pending verification steps (require live pipeline run):
 - Mutate a `docs/` file and confirm hash mismatch triggers Gemini cache deletion on next run.
 - Confirm invalidation errors (e.g., network failure during `deleteStaleCaches`) surface as fatal pipeline termination.
 
-## Handoff for Claude: Add unit test for invalidation failure
+## Handoff for Claude: Add unit test for invalidation failure — COMPLETED
 
-Objective
-- Add a focused unit test that simulates a failure during cache deletion and asserts that checkContextChange surfaces a fatal error (the pipeline must rethrow as `Fatal: context invalidation failed — ...`). This allows verification without executing the full sandbox VM.
+Summary
+- The invalidation-failure unit test has been added at `src/context-hash.invalidation.test.ts` and committed.
+- Commit: 17b47a59a6259ea9aabc3e18cba8253dc6603450
+- Local verification: `npx vitest run src/context-hash.invalidation.test.ts` — PASS (see Local Verification notes below).
 
-Next step from plan.md
-- Verification step #3: "Simulate deleteStaleCaches failure (network block or stub) and re-run: pipeline must raise fatal error; capture logs." Implement a unit test to reproduce the failure mode and assert error behavior.
+Notes
+- The test simulates a `deleteCache` failure and asserts `checkContextChange` rethrows an error whose message starts with `Fatal: context invalidation failed`.
+- This satisfies plan.md verification step #3 at the unit-test level; live CI/sandbox validation still pending.
 
-Relevant files
-- src/context-hash.ts (checkContextChange)
-- New test to create: src/context-hash.invalidation.test.ts
+Next actions for Gemini
+- Attach the local test run output and commit SHA to the handoff record.
+- Run the full pipeline in sandbox/CI to confirm manifest mismatch triggers cache invalidation and that invalidation errors propagate as fatal failures in the live environment.
 
-Task scope
-- Create a new vitest test file at `src/context-hash.invalidation.test.ts`.
-- The test should:
-  1. Prepare a repo-scoped manifest file at `.ai-memory/test-repo-invalidation/canonical/context-manifest.json` with a `files` map that differs from the current repo files (so the stored manifest does not match the newly computed manifest).
-  2. Call `checkContextChange(repoId, readCanonicalStub, deleteCacheStub)` where `deleteCacheStub` throws `new Error('delete failed')` and `readCanonicalStub` returns either `null` or a minimal canonical shape.
-  3. Assert that `checkContextChange` rejects with an Error whose message starts with `Fatal: context invalidation failed`.
+Local Verification (added)
+- Test file: `src/context-hash.invalidation.test.ts`
+- Commit: 17b47a59a6259ea9aabc3e18cba8253dc6603450
+- Verification command: `npx vitest run src/context-hash.invalidation.test.ts`
+- Result: PASS
 
-Constraints
-- Only add the new test file; do NOT modify existing implementation files.
-- Use vitest APIs (import { expect, it } from 'vitest').
-- Keep the test self-contained (create and clean up `.ai-memory/test-repo-invalidation` path as needed).
-- Do not call or modify networked services — this is a pure unit test using a stubbed `deleteCache`.
-
-Expected outcome
-- New test `src/context-hash.invalidation.test.ts` compiles and fails (it should assert that implementation throws). The test passes if implementation correctly rethrows fatal error on deleteCache failure (i.e., test expects rejection).
-
-Verification needed
-- After adding the test, run `npx vitest run src/context-hash.invalidation.test.ts` locally (or in CI) to confirm the test behaves as expected.
-- Commit the new test and push; record the test run output in `conductor/tracks/initial-implementation/handoff.md` under Local Verification.
-
-Handoff for Claude
-- Implement the new test file at `src/context-hash.invalidation.test.ts` exactly as scoped above.
-- Commit with message: `test(context-hash): add invalidation-failure unit test` and include Co-authored-by trailer.
-- Return the test output and the commit SHA so the orchestrator can attach verification logs to handoff.md.
+Handoff Back to Gemini
+- The unit-test verification is complete locally. Remaining work: run the full pipeline in an isolated sandbox/CI and attach logs to this handoff. Once CI logs are attached, mark Phase 5 repo-context verification as DONE.
 
