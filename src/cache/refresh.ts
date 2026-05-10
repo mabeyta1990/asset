@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdir, rename, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { randomBytes } from "node:crypto";
 import { promisify } from "node:util";
@@ -10,14 +10,27 @@ import { deleteCacheByDisplayName } from "../wrappers/gemini.js";
 const CANONICAL_DIR = ".ai-memory/canonical";
 const POINTERS_FILE = join(CANONICAL_DIR, "cache-pointers.json");
 const HASH_FILE = join(CANONICAL_DIR, "codebase-hash.txt");
+const STAGING_DIR = ".ai-memory/staging";
 
 const execFileAsync = promisify(execFile);
 
-async function atomicWrite(filePath: string, data: string): Promise<void> {
-  const dir = dirname(filePath);
-  const tmp = join(dir, `.tmp-${randomBytes(6).toString("hex")}`);
-  await writeFile(tmp, data, "utf8");
-  await rename(tmp, filePath);
+async function atomicWriteAll(files: Array<{ dest: string; data: string }>): Promise<void> {
+  const temps: Array<{ tmp: string; dest: string }> = [];
+  try {
+    for (const { dest, data } of files) {
+      const dir = dirname(dest);
+      await mkdir(dir, { recursive: true });
+      const tmp = join(dir, `.tmp-${randomBytes(6).toString("hex")}`);
+      await writeFile(tmp, data, "utf8");
+      temps.push({ tmp, dest });
+    }
+    for (const { tmp, dest } of temps) {
+      await rename(tmp, dest);
+    }
+  } catch (err) {
+    await Promise.all(temps.map(({ tmp }) => rm(tmp, { force: true })));
+    throw err;
+  }
 }
 
 async function getCurrentCommitHash(): Promise<string> {
@@ -27,6 +40,25 @@ async function getCurrentCommitHash(): Promise<string> {
 
 export async function deleteStaleCaches(previousCacheName: string): Promise<number> {
   return deleteCacheByDisplayName(previousCacheName);
+}
+
+export async function promoteStagedFiles(sessionId: string): Promise<void> {
+  const stagingDir = join(STAGING_DIR, sessionId);
+  const stagedCode = join(stagingDir, "generated-code.ts");
+  const stagedTests = join(stagingDir, "generated-tests.test.ts");
+
+  const [codeContent, testsContent] = await Promise.all([
+    readFile(stagedCode, "utf8"),
+    readFile(stagedTests, "utf8"),
+  ]);
+
+  if (!codeContent.trim()) throw new Error("Staged code file is empty — refusing to promote.");
+  if (!testsContent.trim()) throw new Error("Staged tests file is empty — refusing to promote.");
+
+  await atomicWriteAll([
+    { dest: "src/generated-code.ts", data: codeContent },
+    { dest: "src/generated-tests.test.ts", data: testsContent },
+  ]);
 }
 
 export async function refreshCanonicalState(
@@ -50,8 +82,10 @@ export async function refreshCanonicalState(
     },
   };
 
-  await atomicWrite(HASH_FILE, `${codebaseHash}\n`);
-  await atomicWrite(POINTERS_FILE, JSON.stringify(state, null, 2));
+  await atomicWriteAll([
+    { dest: HASH_FILE, data: `${codebaseHash}\n` },
+    { dest: POINTERS_FILE, data: JSON.stringify(state, null, 2) },
+  ]);
 
   return state;
 }

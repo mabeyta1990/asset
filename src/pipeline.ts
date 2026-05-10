@@ -1,8 +1,9 @@
 import { execFile } from "node:child_process";
-import { readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import type { PromptConfig, StageName, StageOutput, StageVerdict, PipelineState, PipelineEvent } from "./types.js";
 import { initSession, writeStage, finalizeSession } from "./memory.js";
-import { refreshCanonicalState } from "./cache/refresh.js";
+import { promoteStagedFiles, refreshCanonicalState } from "./cache/refresh.js";
 import { callResearch } from "./wrappers/research.js";
 import { callGemini } from "./wrappers/gemini.js";
 import { callClaude } from "./wrappers/claude.js";
@@ -11,6 +12,7 @@ import { callNemotron } from "./wrappers/nemotron.js";
 const GEMINI_CACHE_NAME = "asset-canonical-context";
 const MAX_RETRIES_CODE_GENERATION = 3;
 const MAX_RETRIES_TEST_FAILURE = 3;
+const STAGING_DIR = ".ai-memory/staging";
 
 const REQUIRED_ENV_VARS = [
   "ANTHROPIC_API_KEY",
@@ -30,11 +32,24 @@ function assertEnv(): void {
   }
 }
 
-function runTypeCheck(): Promise<StageOutput> {
+async function runTypeCheck(stagingDir: string): Promise<StageOutput> {
+  const tmpTsConfig = join(stagingDir, "tsconfig.staged.json");
+  await writeFile(tmpTsConfig, JSON.stringify({
+    compilerOptions: {
+      target: "ES2022",
+      module: "ESNext",
+      moduleResolution: "bundler",
+      strict: true,
+      skipLibCheck: true,
+      noEmit: true,
+    },
+    include: ["generated-code.ts"],
+  }), "utf8");
+
   return new Promise((resolve) => {
     execFile(
       "./node_modules/.bin/tsc",
-      ["--noEmit", "--project", "tsconfig.json"],
+      ["--project", tmpTsConfig],
       { shell: false, timeout: 60_000 },
       (err, stdout, stderr) => {
         const content = (stdout + stderr).trim();
@@ -100,6 +115,7 @@ async function refineCodeUntilTypeSafe(
   initialPromptConfig: PromptConfig,
   spec: string,
   sessionId: string,
+  stagingDir: string,
   dispatchFeedback: (event: PipelineEvent) => void,
   priorCode?: string,
   priorTestFeedback?: string,
@@ -108,6 +124,7 @@ async function refineCodeUntilTypeSafe(
   let latestCode = priorCode ?? "";
   let latestTscFeedback = "";
   let pendingTestFeedback = priorTestFeedback;
+  const stagedCodePath = join(stagingDir, "generated-code.ts");
 
   while (true) {
     if (attempt >= MAX_RETRIES_CODE_GENERATION) {
@@ -132,9 +149,9 @@ async function refineCodeUntilTypeSafe(
       ? firstBlock[1].trim()
       : codeOutput.content.replace(/```(?:typescript|ts)?\n?/g, "").replace(/```/g, "").trim();
 
-    await writeFile("src/generated-code.ts", cleanCode, "utf8");
+    await writeFile(stagedCodePath, cleanCode, "utf8");
 
-    const typeCheckOutput = await runTypeCheck();
+    const typeCheckOutput = await runTypeCheck(stagingDir);
 
     if (typeCheckOutput.status === "PASS") {
       return { codeOutput, cleanCode, typeCheckOutput };
@@ -240,7 +257,7 @@ export function reducer(state: PipelineState, event: PipelineEvent): PipelineSta
   }
 }
 
-function runTestsInVM(): Promise<StageOutput> {
+function runTestsInVM(stagedTestPath: string): Promise<StageOutput> {
   return new Promise((resolve) => {
     execFile(
       "orb",
@@ -250,7 +267,7 @@ function runTestsInVM(): Promise<StageOutput> {
         "asset-runner",
         "bash",
         "-c",
-        "cd /mnt/mac/Users/mikea/Developer/asset && ~/asset-deps/node_modules/.bin/vitest run 2>&1",
+        `cd /mnt/mac/Users/mikea/Developer/asset && ~/asset-deps/node_modules/.bin/vitest run ${stagedTestPath} 2>&1`,
       ],
       { shell: false, timeout: 120_000 },
       (err, stdout, stderr) => {
@@ -287,6 +304,8 @@ async function terminate(
 export async function runPipeline(spec: string): Promise<void> {
   assertEnv();
   const sessionId = await initSession(spec);
+  const stagingDir = join(STAGING_DIR, sessionId);
+  await mkdir(stagingDir, { recursive: true });
 
   let state: PipelineState = reducer({ status: "idle" }, { type: "START", spec });
 
@@ -338,6 +357,7 @@ export async function runPipeline(spec: string): Promise<void> {
       codeConfig,
       spec,
       sessionId,
+      stagingDir,
       (event) => { state = reducer(state, event); },
       priorCleanCode,
       latestTestFeedback,
@@ -374,15 +394,16 @@ export async function runPipeline(spec: string): Promise<void> {
     const finalTests = cleanTests.includes("from 'vitest'") || cleanTests.includes('from "vitest"')
       ? cleanTests
       : vitestImport + cleanTests;
-    await writeFile("src/generated-tests.test.ts", finalTests, "utf8");
-    const writtenTests = await readFile("src/generated-tests.test.ts", "utf8");
+    const stagedTestPath = join(stagingDir, "generated-tests.test.ts");
+    await writeFile(stagedTestPath, finalTests, "utf8");
+    const writtenTests = await readFile(stagedTestPath, "utf8");
     const patchedTests = writtenTests
       .replace(/\btest\(/g, "it(")
       .replace(/from '@jest\/globals'/g, "from 'vitest'")
       .replace(/from "@jest\/globals"/g, 'from "vitest"')
       .replace(/\.toBe\((\d+\.\d+)\)/g, '.toBeCloseTo($1)')
       .replace(/(import\s*\{[^}]*\}\s*from\s*['"]vitest['"];\n)(\s*import\s*\{[^}]*\}\s*from\s*['"]vitest['"];\n)+/g, '$1');
-    await writeFile("src/generated-tests.test.ts", patchedTests, "utf8");
+    await writeFile(stagedTestPath, patchedTests, "utf8");
     if (tests.status !== "PASS") {
       state = reducer(state, { type: "FAILURE", failedStage: "tests", error: tests.content });
       await terminate(sessionId, tests.status, "tests", tests);
@@ -404,7 +425,7 @@ export async function runPipeline(spec: string): Promise<void> {
     state = reducer(state, { type: "AUDIT_PRE_PASS", output: preAudit });
 
     // Stage 5: VM execution (OrbStack)
-    vmOutput = await runTestsInVM();
+    vmOutput = await runTestsInVM(stagedTestPath);
     await writeStage(sessionId, 5, "execution", vmOutput);
 
     if (vmOutput.status === "PASS") {
@@ -435,6 +456,7 @@ export async function runPipeline(spec: string): Promise<void> {
 
   if (postAudit.status === "PASS") {
     state = reducer(state, { type: "AUDIT_POST_PASS", output: postAudit });
+    await promoteStagedFiles(sessionId);
     await refreshCanonicalState(sessionId, GEMINI_CACHE_NAME);
     await finalizeSession(sessionId, { verdict: "PASS", summary: postAudit.content.slice(0, 500) });
   } else {
