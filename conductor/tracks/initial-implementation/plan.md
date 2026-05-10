@@ -6,6 +6,8 @@
 - **DONE:** Orchestration & CLI (Initial pipeline and CLI entry point).
 - **DONE:** State Machine Refactor (Type-safe state transitions).
 - **DONE:** Feedback-Threaded Retry Logic (Phase 1: `tsc` compilation errors).
+- **DONE:** Feedback-Threaded Retry Logic (Phase 2: `vitest` execution errors).
+- **DONE:** Doppler Secrets Integration (Core implementation and preflight checks).
 
 ---
 
@@ -16,14 +18,14 @@
     - [x] Update `src/types.ts`: Add `TYPE_CHECK_FEEDBACK` to `PipelineEvent`.
     - [x] Implement `runTypeCheck()` and `parseTscDiagnostics()` in `src/pipeline.ts`.
     - [x] Implement `refineCodeUntilTypeSafe()` retry loop.
-- [ ] **Implement Feedback-Threaded Retry for `vitest` Errors (Phase 2)**
-    - [ ] Update `src/types.ts`: Add `TEST_FEEDBACK` to `PipelineEvent` and update `coding` state.
-    - [ ] Implement `parseVitestDiagnostics(vitestOutput: string): string` in `src/pipeline.ts`.
+- [x] **Implement Feedback-Threaded Retry for `vitest` Errors (Phase 2)**
+    - [x] Update `src/types.ts`: Add `TEST_FEEDBACK` to `PipelineEvent` and update `coding` state.
+    - [x] Implement `parseVitestDiagnostics(vitestOutput: string): string` in `src/pipeline.ts`.
         - *Requirement:* Extract failing test names, error messages, and execution traces.
-    - [ ] Refactor `runPipeline` to support looping back to Stage 2 (Code) on Stage 5 (Execution) failure.
+    - [x] Refactor `runPipeline` to support looping back to Stage 2 (Code) on Stage 5 (Execution) failure.
         - *Constraint:* Max 3 retries for the entire loop (defined by `MAX_RETRIES_TEST_FAILURE`).
         - *Constraint:* Regenerated code MUST trigger a re-run of Stage 3 (Tests), Stage 4 (Pre-audit), Stage 5 (Execution), and Stage 6 (Post-audit).
-    - [ ] Update `buildCodeRetryTask` to handle both `tsc` and `vitest` feedback types cleanly.
+    - [x] Update `buildCodeRetryTask` to handle both `tsc` and `vitest` feedback types cleanly.
 - [ ] **Finalize Trust Gate & Promotion Logic**
     - [ ] Ensure `src/cache/refresh.ts` only updates canonical state on a Stage 6 (Post-audit) PASS.
     - [ ] Implement atomic promotion: Use temporary staging for canonical updates; never overwrite or pollute with failed/in-flight run data.
