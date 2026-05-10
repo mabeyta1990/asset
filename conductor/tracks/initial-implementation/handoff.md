@@ -1,14 +1,28 @@
-# Handoff: Per-Stage Model Selection
+# Handoff: Model Dispatch & CLI Integration
 
-## Priority: Per-Stage Model Selection (NEXT)
-- [x] **Implement Per-Stage Model Selection** — COMPLETED
-    - [x] Add `models` object to `TaskSpec` in `src/types.ts`.
-    - [x] Define supported stage keys: `research`, `plan`, `code`, `audit` (TaskStageKey type).
-    - [x] Validate model names against known providers (Claude, Gemini, GLM, Nemotron, Tavily).
-    - [x] Implement per-stage model override resolution in `runPipeline` within `src/pipeline.ts`.
-    - [x] Preserve current defaults when no override is provided (DEFAULT_MODELS).
-    - [x] Persist chosen model per stage in session JSON (SessionState.modelSelection).
-    - [x] Type system allows test structure (tests pending implementation).
+## Status: REVIEW_REQUIRED
+
+## Priority: Finalize Model Selection (COMPLETE)
+- [x] **Implement Model Dispatch Logic**
+    - [x] Update `callClaude` to use `modelSelection` from the pipeline.
+    - [x] Update `callGemini` to use `modelSelection` from the pipeline.
+    - [x] Update `callNemotron` and `callNemotronPlan` to honor model overrides.
+- [x] **Verification & Testing**
+    - [x] Add unit tests for `resolveModel` in `src/pipeline.ts`.
+    - [x] Add unit tests for `isValidModel` in `src/pipeline.ts`.
+    - [x] Confirm fallback to `DEFAULT_MODELS` when no override is provided.
+- [x] **CLI Wiring**
+    - [x] Update `src/scripts/cli.ts` to accept a path to a `TaskSpec` JSON file.
+    - [x] (Optional) Add CLI flags for per-stage model overrides (e.g., `--model-code opus`).
+
+## Files Allowed to Change
+- `src/types.ts`
+- `src/pipeline.ts`
+- `src/wrappers/claude.ts`
+- `src/wrappers/gemini.ts`
+- `src/wrappers/nemotron.ts`
+- `src/scripts/cli.ts`
+- `src/pipeline.test.ts`
 
 ## Pending Tasks
 - [ ] **Multi-File Generation**
@@ -21,32 +35,63 @@
     - [ ] Add unit/integration coverage for partial-failure rollback.
 
 ## Implementation Notes
-**Infrastructure Complete:**
-- Added `TaskSpec` interface with optional `models` field for per-stage overrides
-- Added `TaskStageKey` type for stage names: `research`, `plan`, `code`, `audit`
-- Added model validation against `KNOWN_MODEL_PROVIDERS` (Claude, Gemini, GLM, Nemotron, Tavily)
-- Added `DEFAULT_MODELS` constant for each stage
-- Added `resolveModel(override, stageKey)` function that validates overrides and falls back to defaults
-- Updated `runPipeline` to accept `TaskSpec | string` (backward compatible)
-- Updated `SessionState` and `initSession` to persist `modelSelection` to session JSON
-- TypeScript compilation succeeds; no errors
+**Complete (Current Turn):**
+- All wrapper functions (`callClaude`, `callGemini`, `callNemotron`, `callNemotronPlan`) now accept optional `model` parameter.
+- `runPipeline` passes resolved model selections to each wrapper call via `modelSelection` record.
+- `refineCodeUntilTypeSafe` now receives `modelSelection` as parameter for code generation retries.
+- CLI enhanced to:
+  - Parse TaskSpec JSON files: `asset spec.json`
+  - Accept plain spec strings: `asset "spec text"`
+  - Support per-stage model overrides: `--model-code claude-opus-4-7 --model-plan nemotron-qa --model-research tavily-search --model-audit nemotron-audit`
+  - Apply CLI overrides to both JSON TaskSpec and plain spec modes
+- Exported `resolveModel` and `isValidModel` for testing and downstream use.
+- 16 new unit tests added for `resolveModel` and `isValidModel` (29 total pipeline tests now pass).
 
-**Cache Thresholds Considered:**
-- Haiku 4.5: 4096 tokens (now supports caching)
-- Sonnet 4.6: 2048 tokens
-- Sonnet 4.5: 1024 tokens
-- Opus 4.7: 4096 tokens
-- Default `code` stage uses Haiku 4.5 (cost-effective with caching)
-- Can override to Opus if higher capability needed
+**Infrastructure (Previous Turn):**
+- `TaskSpec` interface supports optional `models` mapping.
+- `KNOWN_MODEL_PROVIDERS` registry and `resolveModel` logic implemented in `src/pipeline.ts`.
+- `runPipeline` accepts `TaskSpec` and initializes `modelSelection`.
+- `initSession` persists `modelSelection` to `session.json`.
+- `DEFAULT_MODELS` defined: Research (Tavily), Plan (Nemotron), Code (Haiku 4.5), Audit (Nemotron).
 
-**Next Phase:**
-- Implement actual model dispatch logic in `callClaude`/`callGemini`/etc. to honor model selection
-- Add comprehensive tests for model resolution and session persistence
-- Wire up TaskSpec from CLI/API entry points
+**Technical Constraints Met:**
+- Backward compatibility for `runPipeline(spec: string)` maintained.
+- `isValidModel` checks are rigorous to prevent API errors.
+- Type-safe model dispatch across all stages.
+
+## Handoff Back to Gemini
+
+**Summary:**
+Model dispatch logic is fully implemented and tested. All wrapper functions now accept and use model parameters. CLI supports both plain spec strings and TaskSpec JSON files. Unit tests cover model validation and fallback behavior.
+
+**What Changed:**
+- **src/wrappers/claude.ts**: Added `model` parameter (default: "claude-haiku-4-5")
+- **src/wrappers/gemini.ts**: Added `model` parameter to `callGemini` and `ensureCache` (default: "models/gemini-1.5-flash")
+- **src/wrappers/nemotron.ts**: Added `model` parameter to `callNemotron` and `callNemotronPlan` (default: "nvidia/Llama-3.1-Nemotron-70B-Instruct")
+- **src/pipeline.ts**: 
+  - Exported `resolveModel` and `isValidModel` for testing
+  - Updated all wrapper calls to pass `modelSelection[stageKey]`
+  - Added `modelSelection` parameter to `refineCodeUntilTypeSafe`
+- **src/scripts/cli.ts**: CLI now supports:
+  - TaskSpec JSON file paths: `asset spec.json`
+  - Plain spec strings: `asset "spec text"`
+  - Per-stage model overrides: `--model-code MODEL --model-plan MODEL --model-research MODEL --model-audit MODEL`
+  - CLI overrides merge with/override TaskSpec models
+- **src/pipeline.test.ts**: Added 16 unit tests for `resolveModel` and `isValidModel`
+
+**Verification:**
+- All 29 pipeline tests pass (16 new tests for model dispatch)
+- TypeScript compilation passes with no errors
+- Backward compatibility maintained for plain string specs
+- All wrapper function signatures updated consistently
+
+**Blockers/Issues:**
+None. Ready for review and integration testing.
+
+**Next Priority:**
+Multi-file generation (listed in Pending Tasks)
 
 ## Previous Work (v3)
+- [x] **Implement Per-Stage Model Selection (Infrastructure)** — COMPLETED
 - [x] **Fix Claude Prompt Caching** — COMPLETED
-    - Increased stable block size to meet 4096-token floor for Haiku 4.5.
-    - Restructured system block to combine systemPrompt + stableContext with cache_control.
 - [x] **Pipeline Optimization and Audit Refactor** — COMPLETED
-    - Increased token limits and split audit into pre/post stages.

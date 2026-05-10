@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { withTiming, isClaudeUsage, logSessionSummary } from "./pipeline.js";
+import { withTiming, isClaudeUsage, logSessionSummary, resolveModel, isValidModel } from "./pipeline.js";
 import type { StageOutput, ClaudeUsage } from "./types.js";
 
 // ---------------------------------------------------------------------------
@@ -151,6 +151,98 @@ describe("StageOutput with telemetry (shape validation)", () => {
     const telemetry = json["telemetry"] as Record<string, unknown>;
     expect(typeof telemetry["durationMs"]).toBe("number");
     expect(telemetry["usage"]).toEqual(usage);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// resolveModel
+// ---------------------------------------------------------------------------
+describe("resolveModel", () => {
+  it("returns the override when a valid model is provided", () => {
+    const result = resolveModel("claude-opus-4-7", "code");
+    expect(result).toBe("claude-opus-4-7");
+  });
+
+  it("returns the default model when no override is provided", () => {
+    const result = resolveModel(undefined, "code");
+    expect(result).toBe("claude-haiku-4-5");
+  });
+
+  it("returns the default model for each stage", () => {
+    expect(resolveModel(undefined, "research")).toBe("tavily-search");
+    expect(resolveModel(undefined, "plan")).toBe("nemotron-plan");
+    expect(resolveModel(undefined, "code")).toBe("claude-haiku-4-5");
+    expect(resolveModel(undefined, "audit")).toBe("nemotron-audit");
+  });
+
+  it("throws an error when an invalid model is provided", () => {
+    expect(() => resolveModel("invalid-model-xyz", "code")).toThrow(
+      "Invalid model 'invalid-model-xyz' for stage 'code'",
+    );
+  });
+
+  it("allows valid Claude models", () => {
+    const validModels = [
+      "claude-opus-4-7",
+      "claude-opus-4-6",
+      "claude-sonnet-4-6",
+      "claude-sonnet-4-5",
+      "claude-haiku-4-5",
+    ];
+    for (const model of validModels) {
+      const result = resolveModel(model, "code");
+      expect(result).toBe(model);
+    }
+  });
+
+  it("allows valid Nemotron models", () => {
+    const validModels = ["nemotron-plan", "nemotron-audit", "nemotron-qa"];
+    for (const model of validModels) {
+      const result = resolveModel(model, "audit");
+      expect(result).toBe(model);
+    }
+  });
+
+  it("allows valid Gemini models", () => {
+    const result = resolveModel("gemini-2-0", "plan");
+    expect(result).toBe("gemini-2-0");
+  });
+
+  it("allows valid Tavily models", () => {
+    const result = resolveModel("tavily-search", "research");
+    expect(result).toBe("tavily-search");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// isValidModel
+// ---------------------------------------------------------------------------
+describe("isValidModel", () => {
+  it("returns true for valid Claude models", () => {
+    expect(isValidModel("claude-opus-4-7")).toBe(true);
+    expect(isValidModel("claude-haiku-4-5")).toBe(true);
+  });
+
+  it("returns true for valid Gemini models", () => {
+    expect(isValidModel("gemini-2-0")).toBe(true);
+    expect(isValidModel("gemini-1-5-pro")).toBe(true);
+  });
+
+  it("returns true for valid Nemotron models", () => {
+    expect(isValidModel("nemotron-plan")).toBe(true);
+    expect(isValidModel("nemotron-audit")).toBe(true);
+  });
+
+  it("returns true for valid Tavily models", () => {
+    expect(isValidModel("tavily-search")).toBe(true);
+  });
+
+  it("returns false for unknown models", () => {
+    expect(isValidModel("unknown-model-xyz")).toBe(false);
+  });
+
+  it("returns false for empty string", () => {
+    expect(isValidModel("")).toBe(false);
   });
 });
 

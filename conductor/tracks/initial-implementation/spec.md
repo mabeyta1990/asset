@@ -35,6 +35,6 @@ Implement the core ASSET pipeline, including AI model wrappers with caching, ses
 ## Local Verification
 - Date: 2026-05-10
 - Type-check: PASS (npx tsc --noEmit)
-- Unit tests: PASS (vitest run — 31 tests)
-- Notes: Per-stage model selection infrastructure is implemented and validated via TypeScript compilation and session persistence logic. Full dispatch logic is pending wrapper updates.
+- Unit tests: PASS (vitest run — 29 pipeline tests)
+- Notes: Per-stage model selection and CLI integration (JSON TaskSpec + overrides) fully implemented and verified. All wrapper functions updated to use dynamic model selection. Pipeline dispatch logic validated via unit tests.
 

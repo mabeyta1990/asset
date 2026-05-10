@@ -1,7 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import type { PromptConfig, ClaudeUsage, StageOutput, StageName } from "../types.js";
 
-const MODEL = "claude-haiku-4-5";
+const DEFAULT_MODEL = "claude-haiku-4-5";
 const MAX_TOKENS = 4096;
 
 const client = new Anthropic({
@@ -11,10 +11,11 @@ const client = new Anthropic({
 export async function callClaude(
   config: PromptConfig,
   stageName: StageName,
-  attempt = 1
+  attempt = 1,
+  model = DEFAULT_MODEL
 ): Promise<StageOutput> {
   const response = await client.messages.create({
-    model: MODEL,
+    model,
     max_tokens: MAX_TOKENS,
     system: [
       {

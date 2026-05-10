@@ -3,7 +3,7 @@ import { GoogleAICacheManager } from "@google/generative-ai/server";
 import type { CachedContent } from "@google/generative-ai/server";
 import type { PromptConfig, StageName, StageOutput } from "../types.js";
 
-const MODEL = "models/gemini-1.5-flash";
+const DEFAULT_MODEL = "models/gemini-1.5-flash";
 const CACHE_TTL_SECONDS = 86_400;
 const EXPIRY_BUFFER_MS = 60_000;
 const DEFAULT_DISPLAY_NAME = "asset-canonical-context";
@@ -49,6 +49,7 @@ async function ensureCache(
   displayName: string,
   systemInstruction: string,
   stableContext: string,
+  model = DEFAULT_MODEL,
 ): Promise<CachedContent> {
   if (pointer && pointer.displayName === displayName) {
     try {
@@ -66,7 +67,7 @@ async function ensureCache(
   }
 
   const created = await cacheManager.create({
-    model: MODEL,
+    model,
     displayName,
     systemInstruction,
     contents: [{ role: "user", parts: [{ text: stableContext }] }],
@@ -100,10 +101,11 @@ export async function callGemini(
   config: PromptConfig,
   stageName: StageName,
   attempt = 1,
-  options: { displayName?: string } = {},
+  options: { displayName?: string; model?: string } = {},
 ): Promise<StageOutput> {
   const displayName = options.displayName ?? DEFAULT_DISPLAY_NAME;
-  const cache = await ensureCache(displayName, config.systemPrompt, config.stableContext);
+  const modelId = options.model ?? DEFAULT_MODEL;
+  const cache = await ensureCache(displayName, config.systemPrompt, config.stableContext, modelId);
   const model = genAI.getGenerativeModelFromCachedContent(cache);
   const result = await model.generateContent(config.variableTask);
   const meta = result.response.usageMetadata;

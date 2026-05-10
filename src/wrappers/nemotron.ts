@@ -2,7 +2,7 @@ import { execFile } from "node:child_process";
 import type { PromptConfig, StageName, StageOutput, StageVerdict } from "../types.js";
 
 const ENDPOINT = "https://api.deepinfra.com/v1/openai/chat/completions";
-const MODEL = "nvidia/Llama-3.1-Nemotron-70B-Instruct";
+const DEFAULT_MODEL = "nvidia/Llama-3.1-Nemotron-70B-Instruct";
 const MAX_BUFFER = 50 * 1024 * 1024;
 const MAX_TOKENS = 8192;
 
@@ -113,6 +113,7 @@ function extractVerdict(content: string): StageVerdict {
 export async function callNemotronPlan(
   config: PromptConfig,
   attempt = 1,
+  model = DEFAULT_MODEL,
 ): Promise<StageOutput> {
   const systemPrompt = "You are the Strategy stage of the ASSET pipeline. Produce a numbered implementation plan with explicit, testable acceptance criteria. Respond with the plan only.";
   const messages: NemotronMessage[] = [
@@ -121,7 +122,7 @@ export async function callNemotronPlan(
   ];
 
   const body = JSON.stringify({
-    model: MODEL,
+    model,
     stream: false,
     max_tokens: MAX_TOKENS,
     messages,
@@ -151,6 +152,7 @@ export async function callNemotron(
   mode: "pre" | "post",
   stageName: StageName,
   attempt = 1,
+  model = DEFAULT_MODEL,
 ): Promise<StageOutput> {
   const systemPrompt = SYSTEM_PROMPTS[mode];
   const userContent = config.stableContext
@@ -163,7 +165,7 @@ export async function callNemotron(
   ];
 
   const body = JSON.stringify({
-    model: MODEL,
+    model,
     stream: false,
     max_tokens: MAX_TOKENS,
     messages,

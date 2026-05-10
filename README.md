@@ -22,7 +22,9 @@ A session is written to disk at each stage. If any stage returns `ESCALATE`, the
 
 ### Configurable Model Selection
 
-You can override the default models for any task by providing a `models` object in the task specification:
+You can override the default models for any task by providing a `models` object in the task specification, or by using CLI flags.
+
+#### Via Task Specification (JSON)
 
 ```json
 {
@@ -35,6 +37,14 @@ You can override the default models for any task by providing a `models` object 
     "audit": "nemotron-audit"
   }
 }
+```
+
+#### Via CLI Flags
+
+CLI overrides take precedence over TaskSpec models:
+
+```bash
+npm run asset -- "Write a debounce function" --model-code claude-opus-4-7 --model-plan gemini-1-5-pro
 ```
 
 Supported stage keys: `research`, `plan`, `code`, `audit`.
@@ -67,8 +77,14 @@ Supported models include Claude (Opus/Sonnet/Haiku), Gemini (Pro), GLM, and Nemo
 
 ## Usage
 
+ASSET supports both plain-text prompts and structured JSON task specifications:
+
 ```bash
+# Plain-text prompt
 npm run asset "Write a TypeScript function that debounces a callback by N milliseconds"
+
+# JSON Task Specification
+npm run asset tasks/debounce.json
 ```
 
 ## Integrating ASSET into your repository

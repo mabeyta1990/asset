@@ -25,14 +25,25 @@ Status of the initial pipeline implementation roadmap for the ASSET project.
 - [x] **Prompt Optimization:** Refactored hardcoded prompts to registry and implemented two-stage audit split.
 - [x] **Final E2E Validation:** End-to-end smoke test validation and performance envelope verification.
 - [x] **Claude Prompt Caching:** Fixed Haiku 4.5 caching by meeting 4096-token minimum floor in stable blocks.
-- [x] **Per-Stage Model Selection** — COMPLETED
+- [x] **Per-Stage Model Selection (DONE)**
     - [x] Add `models` object to `TaskSpec` in `src/types.ts`.
     - [x] Define supported stage keys: `research`, `plan`, `code`, `audit` (TaskStageKey type).
     - [x] Validate model names against known providers (Claude, Gemini, GLM, Nemotron, Tavily).
     - [x] Implement per-stage model override resolution in `runPipeline` within `src/pipeline.ts`.
     - [x] Preserve current defaults when no override is provided (DEFAULT_MODELS).
     - [x] Persist chosen model per stage in session JSON (SessionState.modelSelection).
-    - [x] Type system allows test structure (tests pending implementation).
+    - [x] Full dispatch logic implemented in all wrapper functions.
+    - [x] CLI support for JSON TaskSpec files and per-stage model flags.
+    - [x] Unit tests for model validation and fallback behavior (16 new tests).
+
+- [ ] **Multi-File Generation (Next Priority)**
+    - [ ] Extend task spec to declare multiple output files.
+    - [ ] Define code-stage output schema as `files: { path, content }[]`.
+    - [ ] Stage each generated file independently in the session workspace.
+    - [ ] Validate all generated files before any promotion occurs.
+    - [ ] Promote all files atomically as a single batch.
+    - [ ] Fail the whole batch if any file fails `tsc`, `vitest`, or audit.
+    - [ ] Add unit/integration coverage for partial-failure rollback.
 
 - [ ] **Surgical File Edits**
     - [ ] Add task-spec support for `mode: "create" | "patch"`.
@@ -43,15 +54,6 @@ Status of the initial pipeline implementation roadmap for the ASSET project.
     - [ ] Add normalize/fuzzy-match fallback for whitespace and quote drift.
     - [ ] Fail fast on ambiguous or missing matches.
     - [ ] Add unit tests for patch apply success, zero-match failure, and multi-match failure.
-
-- [ ] **Multi-File Generation**
-    - [ ] Extend task spec to declare multiple output files.
-    - [ ] Define code-stage output schema as `files: { path, content }[]`.
-    - [ ] Stage each generated file independently in the session workspace.
-    - [ ] Validate all generated files before any promotion occurs.
-    - [ ] Promote all files atomically as a single batch.
-    - [ ] Fail the whole batch if any file fails `tsc`, `vitest`, or audit.
-    - [ ] Add unit/integration coverage for partial-failure rollback.
 
 - [ ] **Retry Loop Telemetry**
     - [ ] Extend `Telemetry` to record `tscRetryCount`.

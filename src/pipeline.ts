@@ -31,14 +31,14 @@ const KNOWN_MODEL_PROVIDERS: Record<ModelProvider, Set<string>> = {
   tavily: new Set(["tavily-search"]),
 };
 
-function isValidModel(modelName: string): boolean {
+export function isValidModel(modelName: string): boolean {
   for (const models of Object.values(KNOWN_MODEL_PROVIDERS)) {
     if (models.has(modelName)) return true;
   }
   return false;
 }
 
-function resolveModel(override: string | undefined, stageKey: TaskStageKey): string {
+export function resolveModel(override: string | undefined, stageKey: TaskStageKey): string {
   if (override && !isValidModel(override)) {
     throw new Error(`Invalid model '${override}' for stage '${stageKey}'. Check KNOWN_MODEL_PROVIDERS.`);
   }
@@ -179,6 +179,7 @@ async function refineCodeUntilTypeSafe(
   spec: string,
   sessionId: string,
   stagingDir: string,
+  modelSelection: Record<TaskStageKey, string>,
   dispatchFeedback: (event: PipelineEvent) => void,
   priorCode?: string,
   priorTestFeedback?: string,
@@ -201,7 +202,7 @@ async function refineCodeUntilTypeSafe(
       : { ...initialPromptConfig, variableTask: buildCodeRetryTask(spec, latestCode, latestTscFeedback || undefined, pendingTestFeedback) };
 
     const attemptStart = performance.now();
-    const codeOutput = await callClaude(promptConfig, "code", attempt + 1);
+    const codeOutput = await callClaude(promptConfig, "code", attempt + 1, modelSelection.code);
     codeOutput.telemetry = { durationMs: Math.round(performance.now() - attemptStart), usage: codeOutput.usage ?? {} };
     await writeStage(sessionId, 2, "code", codeOutput);
 
@@ -420,7 +421,7 @@ export async function runPipeline(taskOrSpec: string | TaskSpec): Promise<void> 
 
   // Stage 1: Plan (Llama-3.3-Nemotron-Super-49B-v1.5)
   const planConfig = buildPlanConfig(research.content, spec);
-  const plan = await withTiming(() => callNemotronPlan(planConfig, 1));
+  const plan = await withTiming(() => callNemotronPlan(planConfig, 1, modelSelection.plan));
   await writeStage(sessionId, 1, "plan", plan);
   if (plan.status !== "PASS") {
     state = reducer(state, { type: "FAILURE", failedStage: "plan", error: plan.content });
@@ -444,6 +445,7 @@ export async function runPipeline(taskOrSpec: string | TaskSpec): Promise<void> 
       spec,
       sessionId,
       stagingDir,
+      modelSelection,
       (event) => { state = reducer(state, event); },
       priorCleanCode,
       latestTestFeedback,
@@ -463,7 +465,7 @@ export async function runPipeline(taskOrSpec: string | TaskSpec): Promise<void> 
 
     // Stage 3: Tests (GLM)
     const testsConfig = buildTestsConfig(cleanCode, spec);
-    const tests = await withTiming(() => callClaude(testsConfig, "tests", 1));
+    const tests = await withTiming(() => callClaude(testsConfig, "tests", 1, modelSelection.code));
     await writeStage(sessionId, 3, "tests", tests);
     const fixedTests = tests.content.replace(/from ['"]\.\/\w+['"]/g, 'from "./generated-code"');
     const strippedTests = fixedTests.replace(/```(?:typescript|ts)?\n?/g, "").replace(/```/g, "").trim();
@@ -493,7 +495,7 @@ export async function runPipeline(taskOrSpec: string | TaskSpec): Promise<void> 
 
     // Stage 4: Pre-audit (Nemotron) — systemPrompt overridden internally by mode
     const preAuditConfig = buildAuditPreConfig(spec, code.content, fixedTests);
-    const preAudit = await withTiming(() => callNemotron(preAuditConfig, "pre", "audit-pre", 1));
+    const preAudit = await withTiming(() => callNemotron(preAuditConfig, "pre", "audit-pre", 1, modelSelection.audit));
     await writeStage(sessionId, 4, "audit-pre", preAudit);
     if (preAudit.status === "ESCALATE") {
       state = reducer(state, { type: "FAILURE", failedStage: "audit-pre", error: preAudit.content });
@@ -524,7 +526,7 @@ export async function runPipeline(taskOrSpec: string | TaskSpec): Promise<void> 
 
   // Stage 6: Post-audit (Nemotron) — systemPrompt overridden internally by mode
   const postAuditConfig = buildAuditPostConfig(spec, vmOutput.content);
-  const postAudit = await withTiming(() => callNemotron(postAuditConfig, "post", "audit-post", 1));
+  const postAudit = await withTiming(() => callNemotron(postAuditConfig, "post", "audit-post", 1, modelSelection.audit));
   await writeStage(sessionId, 6, "audit-post", postAudit);
 
   if (postAudit.status === "PASS") {
