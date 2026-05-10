@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join, dirname, basename } from "node:path";
-import type { ClaudeUsage, PromptConfig, StageName, StageOutput, StageVerdict, PipelineState, PipelineEvent } from "./types.js";
+import type { ClaudeUsage, PromptConfig, StageName, StageOutput, StageVerdict, PipelineState, PipelineEvent, TaskSpec, TaskStageKey, ModelProvider } from "./types.js";
 import { configureMemory, initSession, writeStage, finalizeSession } from "./memory.js";
 import { configureRefresh, getStagingDir, promoteStagedFiles, refreshCanonicalState, deleteStaleCaches } from "./cache/refresh.js";
 import { configureCanonical, readCanonicalState } from "./cache/canonical.js";
@@ -15,6 +15,35 @@ import { buildResearchConfig, buildPlanConfig, buildCodeConfig, buildTestsConfig
 const GEMINI_CACHE_NAME = "asset-canonical-context";
 const MAX_RETRIES_CODE_GENERATION = 3;
 const MAX_RETRIES_TEST_FAILURE = 3;
+
+const DEFAULT_MODELS: Record<TaskStageKey, string> = {
+  research: "tavily-search",
+  plan: "nemotron-plan",
+  code: "claude-haiku-4-5",
+  audit: "nemotron-audit",
+};
+
+const KNOWN_MODEL_PROVIDERS: Record<ModelProvider, Set<string>> = {
+  claude: new Set(["claude-opus-4-7", "claude-opus-4-6", "claude-sonnet-4-6", "claude-sonnet-4-5", "claude-haiku-4-5"]),
+  gemini: new Set(["gemini-2-0", "gemini-1-5-pro"]),
+  glm: new Set(["glm-4", "glm-3-turbo"]),
+  nemotron: new Set(["nemotron-plan", "nemotron-audit", "nemotron-qa"]),
+  tavily: new Set(["tavily-search"]),
+};
+
+function isValidModel(modelName: string): boolean {
+  for (const models of Object.values(KNOWN_MODEL_PROVIDERS)) {
+    if (models.has(modelName)) return true;
+  }
+  return false;
+}
+
+function resolveModel(override: string | undefined, stageKey: TaskStageKey): string {
+  if (override && !isValidModel(override)) {
+    throw new Error(`Invalid model '${override}' for stage '${stageKey}'. Check KNOWN_MODEL_PROVIDERS.`);
+  }
+  return override ?? DEFAULT_MODELS[stageKey];
+}
 
 const REQUIRED_ENV_VARS = [
   "ANTHROPIC_API_KEY",
@@ -346,9 +375,22 @@ async function terminate(
   return process.exit(verdict === "ESCALATE" ? 2 : 1);
 }
 
-export async function runPipeline(spec: string): Promise<void> {
+export async function runPipeline(taskOrSpec: string | TaskSpec): Promise<void> {
   assertEnv();
   const pipelineStart = performance.now();
+
+  const task: TaskSpec = typeof taskOrSpec === "string"
+    ? { id: "", title: "", description: "", models: {} }
+    : taskOrSpec;
+  const spec = typeof taskOrSpec === "string" ? taskOrSpec : task.description;
+
+  // Validate and resolve model overrides
+  const modelSelection: Record<TaskStageKey, string> = {
+    research: resolveModel(task.models?.research, "research"),
+    plan: resolveModel(task.models?.plan, "plan"),
+    code: resolveModel(task.models?.code, "code"),
+    audit: resolveModel(task.models?.audit, "audit"),
+  };
 
   const repoId = await getRepoId();
   configureMemory(repoId);
@@ -357,7 +399,7 @@ export async function runPipeline(spec: string): Promise<void> {
 
   await checkContextChange(repoId, readCanonicalState, deleteStaleCaches);
 
-  const sessionId = await initSession(spec);
+  const sessionId = await initSession(spec, modelSelection);
   const stagingDir = join(getStagingDir(), sessionId);
   await mkdir(stagingDir, { recursive: true });
 

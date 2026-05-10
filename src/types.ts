@@ -40,6 +40,7 @@ export interface SessionState {
   completedAt?: string;
   stages: Partial<Record<StageName, StageOutput>>;
   finalVerdict?: StageVerdict;
+  modelSelection?: Partial<Record<TaskStageKey, string>>;
 }
 
 export interface PromptConfig {
@@ -49,6 +50,17 @@ export interface PromptConfig {
 }
 
 export type PromptTemplateName = "research" | "plan" | "code" | "tests" | "auditPre" | "auditPost";
+
+export type ModelProvider = "claude" | "gemini" | "glm" | "nemotron" | "tavily";
+
+export type TaskStageKey = "research" | "plan" | "code" | "audit";
+
+export interface TaskSpec {
+  id: string;
+  title: string;
+  description: string;
+  models?: Partial<Record<TaskStageKey, string>>;
+}
 
 export interface RetryContext {
   attempt: number;

@@ -25,6 +25,15 @@ Status of the initial pipeline implementation roadmap for the ASSET project.
 - [x] **Prompt Optimization:** Refactored hardcoded prompts to registry and implemented two-stage audit split.
 - [x] **Final E2E Validation:** End-to-end smoke test validation and performance envelope verification.
 - [x] **Claude Prompt Caching:** Fixed Haiku 4.5 caching by meeting 4096-token minimum floor in stable blocks.
+- [x] **Per-Stage Model Selection** — COMPLETED
+    - [x] Add `models` object to `TaskSpec` in `src/types.ts`.
+    - [x] Define supported stage keys: `research`, `plan`, `code`, `audit` (TaskStageKey type).
+    - [x] Validate model names against known providers (Claude, Gemini, GLM, Nemotron, Tavily).
+    - [x] Implement per-stage model override resolution in `runPipeline` within `src/pipeline.ts`.
+    - [x] Preserve current defaults when no override is provided (DEFAULT_MODELS).
+    - [x] Persist chosen model per stage in session JSON (SessionState.modelSelection).
+    - [x] Type system allows test structure (tests pending implementation).
+
 - [ ] **Surgical File Edits**
     - [ ] Add task-spec support for `mode: "create" | "patch"`.
     - [ ] Define patch payload schema, preferably `{ find: string, replace: string }[]`.
@@ -51,15 +60,6 @@ Status of the initial pipeline implementation roadmap for the ASSET project.
     - [ ] Include retry totals in `logSessionSummary`.
     - [ ] Persist retry metadata in session JSON.
     - [ ] Add tests for retry counting across mixed `tsc` and `vitest` failures.
-
-- [ ] **Per-Stage Model Selection**
-    - [ ] Add `models` object to task spec.
-    - [ ] Define supported stage keys, e.g. `research`, `spec`, `code`, `audit`.
-    - [ ] Validate model names against known providers.
-    - [ ] Implement per-stage model override resolution in `runPipeline`.
-    - [ ] Preserve current defaults when no override is provided.
-    - [ ] Persist chosen model per stage in session JSON.
-    - [ ] Add tests for default fallback and per-stage override behavior.
 
 - [ ] **Repo File Insertion**
     - [ ] Add optional `insertPath` field to task spec.

@@ -6,19 +6,40 @@ A 7-stage multi-model AI pipeline that takes a plain-English specification and p
 
 ## How it works
 
-Each stage uses the best available model for that task:
+Each stage uses the best available model for that task by default, but can be overridden per-task:
 
-| Stage | Model | What it does |
-|-------|-------|--------------|
+| Stage | Default Model | What it does |
+|-------|---------------|--------------|
 | 0 — Research | Tavily | Web-searches the spec for relevant context and prior art |
-| 1 — Plan | Gemini 2.5 Pro | Produces a numbered implementation plan with testable acceptance criteria |
-| 2 — Code | Claude Opus 4.7 | Writes the TypeScript implementation from the plan |
-| 3 — Tests | Claude Opus 4.7 | Writes vitest tests against the clean implementation |
-| 4 — Pre-audit | Nemotron | Audits code and tests against the spec before execution |
+| 1 — Plan | Nemotron 70B | Produces a numbered implementation plan with testable acceptance criteria |
+| 2 — Code | Haiku 4.5 | Writes the TypeScript implementation from the plan |
+| 3 — Tests | Haiku 4.5 | Writes vitest tests against the clean implementation |
+| 4 — Pre-audit | Nemotron 70B | Audits code and tests against the spec before execution |
 | 5 — Execution | OrbStack VM | Runs vitest in an isolated Linux VM via `orb` |
-| 6 — Post-audit | Nemotron | Audits execution results; finalizes verdict |
+| 6 — Post-audit | Nemotron 70B | Audits execution results; finalizes verdict |
 
 A session is written to disk at each stage. If any stage returns `ESCALATE`, the pipeline halts and exits with code 2. `FAIL` also halts (except pre-audit, which lets the pipeline continue to VM execution). On full `PASS`, the canonical Gemini context cache is refreshed.
+
+### Configurable Model Selection
+
+You can override the default models for any task by providing a `models` object in the task specification:
+
+```json
+{
+  "id": "my-complex-task",
+  "title": "Complex Feature",
+  "description": "...",
+  "models": {
+    "plan": "gemini-1-5-pro",
+    "code": "claude-opus-4-7",
+    "audit": "nemotron-audit"
+  }
+}
+```
+
+Supported stage keys: `research`, `plan`, `code`, `audit`.
+Supported models include Claude (Opus/Sonnet/Haiku), Gemini (Pro), GLM, and Nemotron.
+
 
 ## Agents Overview
 

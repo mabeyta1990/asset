@@ -1,7 +1,7 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { randomBytes } from "node:crypto";
-import type { StageName, StageOutput, SessionState, StageVerdict } from "./types.js";
+import type { StageName, StageOutput, SessionState, StageVerdict, TaskStageKey } from "./types.js";
 
 let sessionsRoot = ".ai-memory/sessions";
 
@@ -36,7 +36,7 @@ function resolveStageFile(sessionId: string, stageIndex: number): string {
   return join(sessionsRoot, sessionId, stageFilename(stageIndex, name));
 }
 
-export async function initSession(spec: string): Promise<string> {
+export async function initSession(spec: string, modelSelection?: Record<TaskStageKey, string>): Promise<string> {
   const sessionId = new Date().toISOString().replace(/[:.]/g, "-");
   const sessionDir = join(sessionsRoot, sessionId);
   await mkdir(sessionDir, { recursive: true });
@@ -46,6 +46,7 @@ export async function initSession(spec: string): Promise<string> {
     spec,
     startedAt: new Date().toISOString(),
     stages: {},
+    ...(modelSelection && { modelSelection }),
   };
 
   await atomicWrite(join(sessionDir, "session.json"), JSON.stringify(state, null, 2));
