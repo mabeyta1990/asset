@@ -3,6 +3,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { createInterface } from "node:readline";
 import { join, dirname, basename } from "node:path";
 import type { ClaudeUsage, NemotronUsage, ModelUsage, PromptConfig, StageName, StageOutput, StageVerdict, PipelineState, PipelineEvent, TaskSpec, TaskStageKey, ModelProvider, InteractiveAction } from "./types.js";
+import { validateTaskSpec, formatValidationErrors } from "./types/task-spec.js";
 import { configureMemory, initSession, writeStage, finalizeSession } from "./memory.js";
 import { configureRefresh, getStagingDir, promoteStagedFiles, refreshCanonicalState, deleteStaleCaches } from "./cache/refresh.js";
 import { configureCanonical, readCanonicalState } from "./cache/canonical.js";
@@ -527,10 +528,29 @@ export async function runPipeline(taskOrSpec: string | TaskSpec, options?: { int
   const pipelineStart = performance.now();
   const interactiveMode = options?.interactive ?? false;
 
-  const task: TaskSpec = typeof taskOrSpec === "string"
-    ? { id: "", title: "", description: "", models: {} }
-    : taskOrSpec;
-  const spec = typeof taskOrSpec === "string" ? taskOrSpec : task.description;
+  // Stage 0 Pre-validation: Validate task specification
+  let task: TaskSpec;
+  let spec: string;
+
+  if (typeof taskOrSpec === "string") {
+    if (!taskOrSpec.trim()) {
+      throw new Error("Task specification cannot be empty. Provide a non-empty description or a TaskSpec object.");
+    }
+    task = {
+      id: "string-input",
+      title: "Task from string input",
+      description: taskOrSpec,
+    };
+    spec = taskOrSpec;
+  } else {
+    task = taskOrSpec;
+    spec = taskOrSpec.description;
+  }
+
+  const validation = validateTaskSpec(task);
+  if (!validation.valid) {
+    throw new Error(formatValidationErrors(validation.errors));
+  }
 
   // Validate and resolve model overrides
   const modelSelection: Record<TaskStageKey, string> = {
