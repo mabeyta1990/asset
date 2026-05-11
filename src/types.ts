@@ -65,12 +65,7 @@ export type ModelProvider = "claude" | "gemini" | "glm" | "nemotron" | "tavily";
 
 export type TaskStageKey = "research" | "plan" | "code" | "audit";
 
-export interface TaskSpec {
-  id: string;
-  title: string;
-  description: string;
-  models?: Partial<Record<TaskStageKey, string>>;
-}
+export type { TaskSpec } from "./types/task-spec.js";
 
 export interface RetryContext {
   attempt: number;

@@ -2,4 +2,4 @@
 
 | Track ID | Title | Status | Owner | Last Updated |
 | :--- | :--- | :--- | :--- | :--- |
-| `initial-implementation` | Initial Pipeline Implementation | `completed` | Gemini CLI | 2026-05-10 |
+| `initial-implementation` | Initial Pipeline Implementation | `in-review` | Claude Code (Task Spec Validation), Gemini CLI (Roadmap) | 2026-05-10 |

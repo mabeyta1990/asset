@@ -65,9 +65,20 @@ ASSET supports both plain-text prompts and structured JSON task specifications:
 # Plain-text prompt
 npm run asset "Write a TypeScript function that debounces a callback by N milliseconds"
 
-# JSON Task Specification
+# JSON Task Specification (with validation)
 npm run asset tasks/debounce.json
+
+# Task Spec with model overrides
+npm run asset tasks/debounce.json --model-code claude-opus-4-7 --model-plan nemotron-plan
 ```
+
+### Task Specification Validation
+
+All task specifications are validated before pipeline execution:
+- **Required fields**: `id`, `title`, `description`
+- **Optional fields**: `mode` (create|patch|update), `insertPath` (target file path), `models` (per-stage overrides)
+- **Validation includes**: enum validation for modes and models, path format verification, required field presence
+- **Clear errors**: Detailed per-field error messages for invalid specs
 
 ### Interactive Mode
 

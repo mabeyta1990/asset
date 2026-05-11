@@ -65,13 +65,13 @@ Status of the initial pipeline implementation roadmap for the ASSET project.
     - [ ] Fail chained runs when any upstream dependency failed.
     - [ ] Add tests for single dependency, multi-dependency, and failed dependency handling.
 
-- [ ] **Task Spec Validation**
-    - [ ] Define strict schema for task spec fields.
-    - [ ] Validate required fields before Stage 0 begins.
-    - [ ] Validate enums such as `mode`, model names, and target values.
-    - [ ] Validate path-shaped fields such as `insertPath`.
-    - [ ] Return clear user-facing validation errors.
-    - [ ] Add tests for malformed, missing, and unsupported fields.
+- [x] **Task Spec Validation (DONE)**
+    - [x] Define strict schema for task spec fields.
+    - [x] Validate required fields before Stage 0 begins.
+    - [x] Validate enums such as `mode`, model names, and target values.
+    - [x] Validate path-shaped fields such as `insertPath`.
+    - [x] Return clear user-facing validation errors.
+    - [x] Add tests for malformed, missing, and unsupported fields.
 
 - [ ] **Dry-Run / Preview Mode**
     - [ ] Add `--dry-run` CLI flag.
