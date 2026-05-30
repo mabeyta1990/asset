@@ -11,9 +11,10 @@ import { getRepoId, checkContextChange } from "./context-hash.js";
 import { callResearch } from "./wrappers/research.js";
 import { callGemini } from "./wrappers/gemini.js";
 import { callClaude } from "./wrappers/claude.js";
+import { callOpenAI } from "./wrappers/openai.js";
 import { callNemotron, callNemotronPlan } from "./wrappers/nemotron.js";
 import { buildResearchConfig, buildPlanConfig, buildCodeConfig, buildTestsConfig, buildAuditPreConfig, buildAuditPostConfig } from "./prompts/registry.js";
-import { getClaudePricing, calculateClaudeCost, calculateNemotronCost, calculateTavilyCost } from "./pricing/registry.js";
+import { getClaudePricing, calculateClaudeCost, calculateNemotronCost, calculateTavilyCost, calculateOpenAICost } from "./pricing/registry.js";
 
 const GEMINI_CACHE_NAME = "asset-canonical-context";
 const MAX_RETRIES_CODE_GENERATION = 3;
@@ -22,7 +23,7 @@ const MAX_RETRIES_TEST_FAILURE = 3;
 const DEFAULT_MODELS: Record<TaskStageKey, string> = {
   research: "tavily-search",
   plan: "nemotron-plan",
-  code: "claude-haiku-4-5",
+  code: "claude-sonnet-4-6",
   audit: "nemotron-audit",
 };
 
@@ -32,6 +33,7 @@ const KNOWN_MODEL_PROVIDERS: Record<ModelProvider, Set<string>> = {
   glm: new Set(["glm-4", "glm-3-turbo"]),
   nemotron: new Set(["nemotron-plan", "nemotron-audit", "nemotron-qa"]),
   tavily: new Set(["tavily-search"]),
+  openai: new Set(["gpt-4o", "gpt-4o-mini", "o4-mini", "o3-mini"]),
 };
 
 export function isValidModel(modelName: string): boolean {
@@ -96,12 +98,18 @@ function formatTelemetry(stageName: string, output: StageOutput, modelSelection:
     }
   }
 
-  // Nemotron tokens
+  // Nemotron / OpenAI tokens (same usage shape)
   if (isNemotronUsage(usage)) {
+    const isCodeOrTests = stageName === "code" || stageName === "tests";
+    const codeModel = modelSelection.code;
+    const usingOpenAI = isCodeOrTests && isOpenAIModel(codeModel);
+    const label = usingOpenAI ? "openai" : "nemotron";
     if (usage.prompt_tokens > 0 || usage.completion_tokens > 0) {
-      parts.push(`nemotron_tokens(in=${usage.prompt_tokens} out=${usage.completion_tokens})`);
+      parts.push(`${label}_tokens(in=${usage.prompt_tokens} out=${usage.completion_tokens})`);
     }
-    const cost = calculateNemotronCost(usage.prompt_tokens, usage.completion_tokens);
+    const cost = usingOpenAI
+      ? calculateOpenAICost(codeModel, usage.prompt_tokens, usage.completion_tokens)
+      : calculateNemotronCost(usage.prompt_tokens, usage.completion_tokens);
     if (cost > 0) {
       parts.push(`cost=$${cost.toFixed(6)}`);
     }
@@ -171,6 +179,20 @@ export function isNemotronUsage(u: unknown): u is NemotronUsage {
   return typeof u === "object" && u !== null && "prompt_tokens" in u && "completion_tokens" in u;
 }
 
+function isOpenAIModel(model: string): boolean {
+  return KNOWN_MODEL_PROVIDERS.openai.has(model);
+}
+
+async function callCodeModel(
+  config: PromptConfig,
+  stageName: StageName,
+  attempt: number,
+  model: string,
+): Promise<StageOutput> {
+  if (isOpenAIModel(model)) return callOpenAI(config, stageName, attempt, model);
+  return callClaude(config, stageName, attempt, model);
+}
+
 export function logSessionSummary(
   sessionId: string,
   startMs: number,
@@ -182,7 +204,9 @@ export function logSessionSummary(
   const totalDurationMs = Math.round(performance.now() - startMs);
   let claudeInput = 0, claudeOutput = 0, cacheReadTokens = 0, cacheWriteTokens = 0;
   let nemotronPromptTokens = 0, nemotronCompletionTokens = 0;
+  let openaiPromptTokens = 0, openaiCompletionTokens = 0;
   let tavilyRequests = 0;
+  const codeModel = modelSelection.code;
 
   for (const stage of stages) {
     const u = stage.usage;
@@ -192,8 +216,14 @@ export function logSessionSummary(
       cacheReadTokens += u.cache_read_input_tokens;
       cacheWriteTokens += u.cache_creation_input_tokens;
     } else if (isNemotronUsage(u)) {
-      nemotronPromptTokens += u.prompt_tokens;
-      nemotronCompletionTokens += u.completion_tokens;
+      const isCodeStage = stage.stage === "code" || stage.stage === "tests";
+      if (isCodeStage && isOpenAIModel(codeModel)) {
+        openaiPromptTokens += u.prompt_tokens;
+        openaiCompletionTokens += u.completion_tokens;
+      } else {
+        nemotronPromptTokens += u.prompt_tokens;
+        nemotronCompletionTokens += u.completion_tokens;
+      }
     } else if (typeof u === "object" && u !== null && "results" in u) {
       tavilyRequests += typeof u.results === "number" ? u.results : 0;
     }
@@ -204,6 +234,9 @@ export function logSessionSummary(
   if (claudeInput > 0 || claudeOutput > 0) {
     tokenParts.push(`claude_in=${claudeInput} claude_out=${claudeOutput}`);
   }
+  if (openaiPromptTokens > 0 || openaiCompletionTokens > 0) {
+    tokenParts.push(`openai_in=${openaiPromptTokens} openai_out=${openaiCompletionTokens}`);
+  }
   if (nemotronPromptTokens > 0 || nemotronCompletionTokens > 0) {
     tokenParts.push(`nemotron_in=${nemotronPromptTokens} nemotron_out=${nemotronCompletionTokens}`);
   }
@@ -213,17 +246,17 @@ export function logSessionSummary(
   const tokensDisplay = tokenParts.length > 0 ? tokenParts.join(" ") : "tokens=0";
 
   // Calculate accurate costs using pricing registry
-  const claudeModel = modelSelection.code;
-  const claudePricing = getClaudePricing(claudeModel);
-  const claudeCost = calculateClaudeCost(claudeModel, {
+  const claudePricing = getClaudePricing(codeModel);
+  const claudeCost = isOpenAIModel(codeModel) ? 0 : calculateClaudeCost(codeModel, {
     input: claudeInput,
     output: claudeOutput,
     cacheWrite: cacheWriteTokens,
     cacheHit: cacheReadTokens,
   });
+  const openaiCost = isOpenAIModel(codeModel) ? calculateOpenAICost(codeModel, openaiPromptTokens, openaiCompletionTokens) : 0;
   const nemotronCost = calculateNemotronCost(nemotronPromptTokens, nemotronCompletionTokens);
   const tavilyCost = calculateTavilyCost(tavilyRequests);
-  const totalCostUsd = (claudeCost + nemotronCost + tavilyCost).toFixed(4);
+  const totalCostUsd = (claudeCost + openaiCost + nemotronCost + tavilyCost).toFixed(4);
 
   // Cache efficiency (Claude only)
   const cacheEfficiencyPct = cacheReadTokens + cacheWriteTokens > 0
@@ -348,7 +381,7 @@ async function refineCodeUntilTypeSafe(
       : { ...initialPromptConfig, variableTask: buildCodeRetryTask(spec, latestCode, latestTscFeedback || undefined, pendingTestFeedback) };
 
     const attemptStart = performance.now();
-    const codeOutput = await callClaude(promptConfig, "code", attempt + 1, modelSelection.code);
+    const codeOutput = await callCodeModel(promptConfig, "code", attempt + 1, modelSelection.code);
     codeOutput.telemetry = { durationMs: Math.round(performance.now() - attemptStart), usage: codeOutput.usage ?? {} };
     await writeStage(sessionId, 2, "code", codeOutput);
 
@@ -689,7 +722,7 @@ export async function runPipeline(taskOrSpec: string | TaskSpec, options?: { int
     if (interactiveCodeFeedback) {
       testsConfig.variableTask = `${testsConfig.variableTask}\n\nAdditional feedback from interactive review: ${interactiveCodeFeedback}`;
     }
-    const tests = await withTiming(() => callClaude(testsConfig, "tests", 1, modelSelection.code));
+    const tests = await withTiming(() => callCodeModel(testsConfig, "tests", 1, modelSelection.code));
     await writeStage(sessionId, 3, "tests", tests);
     const fixedTests = tests.content.replace(/from ['"]\.\/\w+['"]/g, 'from "./generated-code"');
     const strippedTests = fixedTests.replace(/```(?:typescript|ts)?\n?/g, "").replace(/```/g, "").trim();

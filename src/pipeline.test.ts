@@ -362,13 +362,13 @@ describe("resolveModel", () => {
 
   it("returns the default model when no override is provided", () => {
     const result = resolveModel(undefined, "code");
-    expect(result).toBe("claude-haiku-4-5");
+    expect(result).toBe("claude-sonnet-4-6");
   });
 
   it("returns the default model for each stage", () => {
     expect(resolveModel(undefined, "research")).toBe("tavily-search");
     expect(resolveModel(undefined, "plan")).toBe("nemotron-plan");
-    expect(resolveModel(undefined, "code")).toBe("claude-haiku-4-5");
+    expect(resolveModel(undefined, "code")).toBe("claude-sonnet-4-6");
     expect(resolveModel(undefined, "audit")).toBe("nemotron-audit");
   });
 

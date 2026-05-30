@@ -10,6 +10,11 @@ export interface NemotronPricing {
   output: number; // $/MTok
 }
 
+export interface OpenAIPricing {
+  input: number;  // $/MTok
+  output: number; // $/MTok
+}
+
 export interface TavilyPricing {
   costPerRequest: number; // $ per API call
 }
@@ -27,6 +32,16 @@ const CLAUDE_PRICING: Record<string, ClaudePricing> = {
 };
 
 const DEFAULT_CLAUDE: ClaudePricing = CLAUDE_PRICING["claude-haiku-4-5"]!;
+
+// OpenAI pricing (May 2026)
+const OPENAI_PRICING: Record<string, OpenAIPricing> = {
+  "gpt-4o":      { input: 2.50, output: 10.00 },
+  "gpt-4o-mini": { input: 0.15, output: 0.60 },
+  "o4-mini":     { input: 1.10, output: 4.40 },
+  "o3-mini":     { input: 1.10, output: 4.40 },
+};
+
+const DEFAULT_OPENAI: OpenAIPricing = OPENAI_PRICING["gpt-4o-mini"]!;
 
 // Nemotron pricing (May 2026)
 const NEMOTRON_PRICING: NemotronPricing = {
@@ -64,6 +79,15 @@ export function calculateNemotronCost(promptTokens: number, completionTokens: nu
     (promptTokens * NEMOTRON_PRICING.input + completionTokens * NEMOTRON_PRICING.output) /
     1_000_000
   );
+}
+
+export function getOpenAIPricing(model: string): OpenAIPricing {
+  return OPENAI_PRICING[model] ?? DEFAULT_OPENAI;
+}
+
+export function calculateOpenAICost(model: string, promptTokens: number, completionTokens: number): number {
+  const pricing = getOpenAIPricing(model);
+  return (promptTokens * pricing.input + completionTokens * pricing.output) / 1_000_000;
 }
 
 export function calculateTavilyCost(requestCount: number): number {

@@ -246,24 +246,132 @@ describe("aggregateCosts", () => {
     expect(result.byStage["plan"]).toBeCloseTo(0.0003, 5);
   });
 
-  it("should skip sessions without modelSelection", async () => {
+  it("should aggregate legacy sessions without modelSelection across all stages", async () => {
     const sessionId = "2026-05-10T12-00-04-000Z";
     const sessionDir = join(testDir, sessionId);
     await mkdir(sessionDir);
 
     const session: SessionState = {
       sessionId,
-      spec: "No model selection",
+      spec: "Legacy full pipeline",
       startedAt: "2026-05-10T12:00:04Z",
+      stages: {
+        research: {
+          stage: "research",
+          status: "PASS",
+          content: "r",
+          timestamp: "2026-05-10T12:00:04Z",
+          attempt: 1,
+          telemetry: { durationMs: 100, usage: { results: 5 } },
+        },
+        plan: {
+          stage: "plan",
+          status: "PASS",
+          content: "p",
+          timestamp: "2026-05-10T12:00:04Z",
+          attempt: 1,
+          telemetry: {
+            durationMs: 100,
+            usage: { prompt_tokens: 500, completion_tokens: 250, total_tokens: 750 },
+          },
+        },
+        code: {
+          stage: "code",
+          status: "PASS",
+          content: "c",
+          timestamp: "2026-05-10T12:00:04Z",
+          attempt: 1,
+          telemetry: {
+            durationMs: 100,
+            usage: {
+              input_tokens: 1000,
+              output_tokens: 500,
+              cache_creation_input_tokens: 0,
+              cache_read_input_tokens: 0,
+            },
+          },
+        },
+        tests: {
+          stage: "tests",
+          status: "PASS",
+          content: "t",
+          timestamp: "2026-05-10T12:00:04Z",
+          attempt: 1,
+          telemetry: {
+            durationMs: 100,
+            usage: {
+              input_tokens: 200,
+              output_tokens: 100,
+              cache_creation_input_tokens: 0,
+              cache_read_input_tokens: 0,
+            },
+          },
+        },
+        "audit-pre": {
+          stage: "audit-pre",
+          status: "PASS",
+          content: "a1",
+          timestamp: "2026-05-10T12:00:04Z",
+          attempt: 1,
+          telemetry: {
+            durationMs: 100,
+            usage: { prompt_tokens: 100, completion_tokens: 50, total_tokens: 150 },
+          },
+        },
+        "audit-post": {
+          stage: "audit-post",
+          status: "PASS",
+          content: "a2",
+          timestamp: "2026-05-10T12:00:04Z",
+          attempt: 1,
+          telemetry: {
+            durationMs: 100,
+            usage: { prompt_tokens: 100, completion_tokens: 50, total_tokens: 150 },
+          },
+        },
+      },
+    };
+
+    await writeFile(join(sessionDir, "session.json"), JSON.stringify(session, null, 2));
+
+    const result = await aggregateCosts(testDir);
+
+    // research:    tavily 5 results @ $0.008 = $0.040
+    // plan:        nemotron (500*0.2 + 250*0.8)/1e6 = $0.0003
+    // code:        claude-sonnet-4-6 (1000*3 + 500*15)/1e6 = $0.0105
+    // tests:       claude-sonnet-4-6 (200*3 + 100*15)/1e6  = $0.0021
+    // audit-pre:   nemotron (100*0.2 + 50*0.8)/1e6   = $0.00006
+    // audit-post:  same                              = $0.00006
+    expect(result.byModel["tavily-search"]).toBeCloseTo(0.04, 5);
+    expect(result.byModel["nemotron-plan"]).toBeCloseTo(0.0003, 5);
+    expect(result.byModel["claude-sonnet-4-6"]).toBeCloseTo(0.0126, 5);
+    expect(result.byModel["nemotron-audit"]).toBeCloseTo(0.00012, 5);
+    expect(result.byStage["research"]).toBeCloseTo(0.04, 5);
+    expect(result.byStage["plan"]).toBeCloseTo(0.0003, 5);
+    expect(result.byStage["code"]).toBeCloseTo(0.0105, 5);
+    expect(result.byStage["tests"]).toBeCloseTo(0.0021, 5);
+    expect(result.byStage["audit-pre"]).toBeCloseTo(0.00006, 5);
+    expect(result.byStage["audit-post"]).toBeCloseTo(0.00006, 5);
+    expect(result.total).toBeCloseTo(0.04 + 0.0003 + 0.0126 + 0.00012, 5);
+  });
+
+  it("should combine legacy and modern sessions in a single aggregation", async () => {
+    const legacyId = "2026-05-10T12-00-10-000Z";
+    const legacyDir = join(testDir, legacyId);
+    await mkdir(legacyDir);
+    const legacy: SessionState = {
+      sessionId: legacyId,
+      spec: "Legacy",
+      startedAt: "2026-05-10T12:00:10Z",
       stages: {
         code: {
           stage: "code",
           status: "PASS",
-          content: "code",
-          timestamp: "2026-05-10T12:00:04Z",
+          content: "c",
+          timestamp: "2026-05-10T12:00:10Z",
           attempt: 1,
           telemetry: {
-            durationMs: 1000,
+            durationMs: 100,
             usage: {
               input_tokens: 1000,
               output_tokens: 500,
@@ -274,11 +382,98 @@ describe("aggregateCosts", () => {
         },
       },
     };
+    await writeFile(join(legacyDir, "session.json"), JSON.stringify(legacy, null, 2));
 
-    await writeFile(
-      join(sessionDir, "session.json"),
-      JSON.stringify(session, null, 2)
-    );
+    const modernId = "2026-05-10T12-00-11-000Z";
+    const modernDir = join(testDir, modernId);
+    await mkdir(modernDir);
+    const modern: SessionState = {
+      sessionId: modernId,
+      spec: "Modern",
+      startedAt: "2026-05-10T12:00:11Z",
+      stages: {
+        code: {
+          stage: "code",
+          status: "PASS",
+          content: "c",
+          timestamp: "2026-05-10T12:00:11Z",
+          attempt: 1,
+          telemetry: {
+            durationMs: 100,
+            usage: {
+              input_tokens: 1000,
+              output_tokens: 500,
+              cache_creation_input_tokens: 0,
+              cache_read_input_tokens: 0,
+            },
+          },
+        },
+      },
+      modelSelection: { code: "claude-haiku-4-5" },
+    };
+    await writeFile(join(modernDir, "session.json"), JSON.stringify(modern, null, 2));
+
+    const result = await aggregateCosts(testDir);
+
+    // Legacy (no modelSelection): inferred claude-sonnet-4-6, (1000*3 + 500*15)/1e6 = $0.0105
+    // Modern (explicit haiku):    claude-haiku-4-5,           (1000*1 + 500*5)/1e6  = $0.0035
+    expect(result.total).toBeCloseTo(0.014, 5);
+    expect(result.byModel["claude-sonnet-4-6"]).toBeCloseTo(0.0105, 5);
+    expect(result.byModel["claude-haiku-4-5"]).toBeCloseTo(0.0035, 5);
+    expect(result.byStage["code"]).toBeCloseTo(0.014, 5);
+    expect(result.byTaskId["Legacy"]).toBeCloseTo(0.0105, 5);
+    expect(result.byTaskId["Modern"]).toBeCloseTo(0.0035, 5);
+  });
+
+  it("should handle execution stage with telemetry but no usage", async () => {
+    const sessionId = "2026-05-10T12-00-12-000Z";
+    const sessionDir = join(testDir, sessionId);
+    await mkdir(sessionDir);
+    // Real on-disk sessions have execution stages with telemetry but no usage —
+    // cast through unknown because Telemetry.usage is typed non-optional.
+    const session = {
+      sessionId,
+      spec: "Execution no usage",
+      startedAt: "2026-05-10T12:00:12Z",
+      stages: {
+        execution: {
+          stage: "execution",
+          status: "PASS",
+          content: "ran",
+          timestamp: "2026-05-10T12:00:12Z",
+          attempt: 1,
+          telemetry: { durationMs: 1000 },
+        },
+      },
+    } as unknown as SessionState;
+    await writeFile(join(sessionDir, "session.json"), JSON.stringify(session, null, 2));
+
+    const result = await aggregateCosts(testDir);
+
+    expect(result.total).toBe(0);
+    expect(Object.keys(result.byStage).length).toBe(0);
+  });
+
+  it("should skip stages with unknown usage shape without throwing", async () => {
+    const sessionId = "2026-05-10T12-00-13-000Z";
+    const sessionDir = join(testDir, sessionId);
+    await mkdir(sessionDir);
+    const session: SessionState = {
+      sessionId,
+      spec: "Unknown shape",
+      startedAt: "2026-05-10T12:00:13Z",
+      stages: {
+        code: {
+          stage: "code",
+          status: "PASS",
+          content: "c",
+          timestamp: "2026-05-10T12:00:13Z",
+          attempt: 1,
+          telemetry: { durationMs: 100, usage: { mystery_field: 42 } as unknown as Record<string, number> },
+        },
+      },
+    };
+    await writeFile(join(sessionDir, "session.json"), JSON.stringify(session, null, 2));
 
     const result = await aggregateCosts(testDir);
 

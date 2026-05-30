@@ -61,7 +61,7 @@ export interface PromptConfig {
 
 export type PromptTemplateName = "research" | "plan" | "code" | "tests" | "auditPre" | "auditPost";
 
-export type ModelProvider = "claude" | "gemini" | "glm" | "nemotron" | "tavily";
+export type ModelProvider = "claude" | "gemini" | "glm" | "nemotron" | "tavily" | "openai";
 
 export type TaskStageKey = "research" | "plan" | "code" | "audit";
 
