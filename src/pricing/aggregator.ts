@@ -2,13 +2,42 @@ import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { SessionState, TaskStageKey } from "../types.js";
 import { isClaudeUsage, isNemotronUsage } from "../pipeline.js";
-import { getClaudePricing, calculateClaudeCost, calculateNemotronCost, calculateTavilyCost } from "./registry.js";
+import { getClaudePricing, calculateClaudeCost, calculateNemotronCost, calculateTavilyCost, calculateOpenAICost } from "./registry.js";
 
 export interface CostBreakdown {
   byModel: Record<string, number>;
   byStage: Record<string, number>;
   byTaskId: Record<string, number>;
   total: number;
+}
+
+// Mirrors DEFAULT_MODELS in src/pipeline.ts, keyed by stage name so legacy
+// sessions written before modelSelection was persisted can still be costed.
+// Keep in sync with src/pipeline.ts DEFAULT_MODELS.
+const STAGE_DEFAULT_MODELS: Record<string, string> = {
+  research: "tavily-search",
+  plan: "nemotron-plan",
+  code: "claude-sonnet-4-6",
+  "type-check": "claude-sonnet-4-6",
+  tests: "claude-sonnet-4-6",
+  "audit-pre": "nemotron-audit",
+  "audit-post": "nemotron-audit",
+  execution: "nemotron-audit",
+};
+
+function inferModelForStage(stageName: string, usage: unknown): string | undefined {
+  const stageDefault = STAGE_DEFAULT_MODELS[stageName];
+
+  if (isClaudeUsage(usage)) {
+    return stageDefault?.startsWith("claude-") ? stageDefault : undefined;
+  }
+  if (isNemotronUsage(usage)) {
+    return stageDefault?.startsWith("nemotron-") ? stageDefault : undefined;
+  }
+  if (typeof usage === "object" && usage !== null && "results" in usage) {
+    return "tavily-search";
+  }
+  return stageDefault;
 }
 
 export async function aggregateCosts(sessionsDir: string): Promise<CostBreakdown> {
@@ -54,11 +83,12 @@ export async function aggregateCosts(sessionsDir: string): Promise<CostBreakdown
           const usage = stageOutput.telemetry.usage;
           let stageCost = 0;
 
-          // Determine the model used for this stage
+          // Determine the model used for this stage. Explicit modelSelection
+          // wins; fall back to inference for legacy sessions written before
+          // modelSelection was persisted.
           const modelKey = stageToModelKey[stageName];
-          if (!modelKey) continue;
-
-          const modelForStage = session.modelSelection?.[modelKey];
+          const explicit = modelKey ? session.modelSelection?.[modelKey] : undefined;
+          const modelForStage = explicit ?? inferModelForStage(stageName, usage);
           if (!modelForStage) continue;
 
           // Calculate cost based on model type
@@ -74,6 +104,10 @@ export async function aggregateCosts(sessionsDir: string): Promise<CostBreakdown
           } else if (modelForStage.startsWith("nemotron-")) {
             if (isNemotronUsage(usage)) {
               stageCost = calculateNemotronCost(usage.prompt_tokens, usage.completion_tokens);
+            }
+          } else if (modelForStage.startsWith("gpt-") || modelForStage.startsWith("o3-") || modelForStage.startsWith("o4-")) {
+            if (isNemotronUsage(usage)) {
+              stageCost = calculateOpenAICost(modelForStage, usage.prompt_tokens, usage.completion_tokens);
             }
           } else if (modelForStage === "tavily-search") {
             // Tavily costs are per request, stored as "results" count
